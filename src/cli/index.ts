@@ -8,20 +8,10 @@ import { buildStatusCommand } from './status.js';
 import { setVerbose } from '../utils/logger.js';
 import { syncOrders } from '../sync/order-sync.js';
 import { syncInventory } from '../sync/inventory-sync.js';
-import { getDb } from '../db/client.js';
-import { authTokens } from '../db/schema.js';
-import { eq } from 'drizzle-orm';
+import { syncPrices } from '../sync/price-sync.js';
+import { syncFulfillments } from '../sync/fulfillment-sync.js';
+import { getValidEbayToken, getValidShopifyToken } from '../ebay/token-manager.js';
 import { info, error as logError } from '../utils/logger.js';
-
-const getToken = async (platform: string): Promise<string | null> => {
-  const db = await getDb();
-  const row = await db
-    .select()
-    .from(authTokens)
-    .where(eq(authTokens.platform, platform))
-    .get();
-  return row?.accessToken ?? null;
-};
 
 const program = new Command();
 
@@ -45,53 +35,94 @@ program
   .option('--since <date>', 'Only sync orders/changes after this date')
   .option('--dry-run', 'Preview changes without applying')
   .option('--json', 'Output as JSON')
-  .action(async (opts: { since?: string; dryRun?: boolean; json?: boolean }) => {
-    const ebayToken = await getToken('ebay');
-    const shopifyToken = await getToken('shopify');
+  .option('--watch <minutes>', 'Poll continuously every N minutes')
+  .action(async (opts: { since?: string; dryRun?: boolean; json?: boolean; watch?: string }) => {
+    const runSync = async () => {
+      const ebayToken = await getValidEbayToken();
+      const shopifyToken = await getValidShopifyToken();
 
-    if (!shopifyToken) {
-      logError('Shopify not connected. Run: ebaysync auth shopify');
-      process.exitCode = 1;
-      return;
+      if (!shopifyToken) {
+        logError('Shopify not connected. Run: ebaysync auth shopify');
+        process.exitCode = 1;
+        return;
+      }
+      if (!ebayToken) {
+        logError('eBay not connected. Run: ebaysync auth ebay');
+        process.exitCode = 1;
+        return;
+      }
+
+      info('=== Full Sync ===');
+      info(`  ${new Date().toISOString()}`);
+      info('');
+
+      // 1. Order sync (eBay → Shopify)
+      const orderSpinner = ora('Step 1/4: Syncing eBay orders → Shopify').start();
+      try {
+        const orderResult = await syncOrders(ebayToken, shopifyToken, {
+          createdAfter: opts.since,
+          dryRun: opts.dryRun,
+        });
+        orderSpinner.succeed(
+          `Orders: ${orderResult.imported} imported, ${orderResult.skipped} skipped, ${orderResult.failed} failed`,
+        );
+      } catch (err) {
+        orderSpinner.fail(`Order sync error: ${err instanceof Error ? err.message : err}`);
+      }
+
+      // 2. Price sync (Shopify → eBay)
+      const priceSpinner = ora('Step 2/4: Syncing prices Shopify → eBay').start();
+      try {
+        const priceResult = await syncPrices(ebayToken, shopifyToken, {
+          dryRun: opts.dryRun,
+        });
+        priceSpinner.succeed(
+          `Prices: ${priceResult.updated} updated, ${priceResult.skipped} unchanged, ${priceResult.failed} failed`,
+        );
+      } catch (err) {
+        priceSpinner.fail(`Price sync error: ${err instanceof Error ? err.message : err}`);
+      }
+
+      // 3. Inventory sync (Shopify → eBay)
+      const invSpinner = ora('Step 3/4: Syncing inventory Shopify → eBay').start();
+      try {
+        const invResult = await syncInventory(ebayToken, shopifyToken, {
+          dryRun: opts.dryRun,
+        });
+        invSpinner.succeed(
+          `Inventory: ${invResult.updated} updated, ${invResult.skipped} unchanged, ${invResult.failed} failed`,
+        );
+      } catch (err) {
+        invSpinner.fail(`Inventory sync error: ${err instanceof Error ? err.message : err}`);
+      }
+
+      // 4. Fulfillment sync (Shopify → eBay)
+      const fulfillSpinner = ora('Step 4/4: Syncing fulfillments Shopify → eBay').start();
+      try {
+        const fulfillResult = await syncFulfillments(ebayToken, shopifyToken, {
+          dryRun: opts.dryRun,
+        });
+        fulfillSpinner.succeed(
+          `Fulfillments: ${fulfillResult.updated} shipped, ${fulfillResult.skipped} unchanged, ${fulfillResult.failed} failed`,
+        );
+      } catch (err) {
+        fulfillSpinner.fail(`Fulfillment sync error: ${err instanceof Error ? err.message : err}`);
+      }
+
+      info('');
+      info('Sync complete.');
+    };
+
+    await runSync();
+
+    // Watch mode — poll continuously
+    if (opts.watch) {
+      const intervalMin = parseInt(opts.watch) || 15;
+      info(`\nWatch mode: polling every ${intervalMin} minutes. Ctrl+C to stop.`);
+      setInterval(runSync, intervalMin * 60 * 1000);
+      // Keep process alive
+      await new Promise(() => {});
     }
-    if (!ebayToken) {
-      logError('eBay not connected. Run: ebaysync auth ebay');
-      process.exitCode = 1;
-      return;
-    }
-
-    info('=== Full Sync ===');
-    info('');
-
-    // 1. Order sync (eBay → Shopify)
-    const orderSpinner = ora('Step 1/2: Syncing eBay orders → Shopify').start();
-    try {
-      const orderResult = await syncOrders(ebayToken, shopifyToken, {
-        createdAfter: opts.since,
-        dryRun: opts.dryRun,
-      });
-      orderSpinner.succeed(
-        `Orders: ${orderResult.imported} imported, ${orderResult.skipped} skipped, ${orderResult.failed} failed`,
-      );
-    } catch (err) {
-      orderSpinner.fail(`Order sync error: ${err instanceof Error ? err.message : err}`);
-    }
-
-    // 2. Inventory sync (Shopify → eBay)
-    const invSpinner = ora('Step 2/2: Syncing inventory Shopify → eBay').start();
-    try {
-      const invResult = await syncInventory(ebayToken, shopifyToken, {
-        dryRun: opts.dryRun,
-      });
-      invSpinner.succeed(
-        `Inventory: ${invResult.updated} updated, ${invResult.skipped} unchanged, ${invResult.failed} failed`,
-      );
-    } catch (err) {
-      invSpinner.fail(`Inventory sync error: ${err instanceof Error ? err.message : err}`);
-    }
-
-    info('');
-    info('Sync complete.');
   });
 
 program.addCommand(buildAuthCommand());
