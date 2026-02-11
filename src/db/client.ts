@@ -5,8 +5,10 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import * as schema from './schema.js';
 
-const DB_DIR = path.join(os.homedir(), '.clawdbot');
-const DB_PATH = path.join(DB_DIR, 'ebaysync.db');
+// Use env var for DATABASE_PATH, fallback to local development path
+const DEFAULT_DB_DIR = path.join(os.homedir(), '.clawdbot');
+const DB_PATH = process.env.DATABASE_PATH || path.join(DEFAULT_DB_DIR, 'ebaysync.db');
+const DB_DIR = path.dirname(DB_PATH);
 
 export const ensureDbPath = async (): Promise<string> => {
   await fs.mkdir(DB_DIR, { recursive: true });

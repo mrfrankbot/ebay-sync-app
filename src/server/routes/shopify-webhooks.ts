@@ -15,7 +15,7 @@ async function verifyShopifyWebhook(req: Request): Promise<boolean> {
     const rawBody = (req as any).rawBody;
     if (!rawBody) {
       warn('[Shopify Webhook] No raw body for HMAC verification');
-      return true;
+      return false; // Fail verification if no body
     }
 
     const bodyStr = Buffer.isBuffer(rawBody) ? rawBody.toString('utf8') : rawBody;
@@ -39,6 +39,7 @@ router.post('/webhooks/shopify/:topic', async (req: Request, res: Response) => {
   const isValid = await verifyShopifyWebhook(req);
   if (!isValid) {
     warn(`[Shopify Webhook] HMAC verification failed: ${topic}`);
+    return; // Stop processing if signature is invalid
   }
 
   const payload = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);

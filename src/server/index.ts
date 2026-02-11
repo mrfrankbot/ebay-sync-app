@@ -12,6 +12,7 @@ import ebayNotificationRoutes from './routes/ebay-notifications.js';
 import shopifyWebhookRoutes from './routes/shopify-webhooks.js';
 import shopifyAuthRoutes from './routes/shopify-auth.js';
 import ebayAuthRoutes from './routes/ebay-auth.js';
+import { apiKeyAuth, rateLimit } from './middleware/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,14 +22,32 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
 // --- Middleware ---
 
-// CORS for Shopify admin embed
+// CORS configuration - restrictive for security
 app.use(cors({
-  origin: [
-    'https://admin.shopify.com',
-    'https://usedcameragear.myshopify.com',
-    /\.shopify\.com$/,
-  ],
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = [
+      'https://admin.shopify.com',
+      'https://usedcameragear.myshopify.com',
+      'https://ebay-sync-app-production.up.railway.app', // Our own domain
+    ];
+    
+    // Allow Shopify domains
+    if (origin.match(/\.shopify\.com$/)) {
+      return callback(null, true);
+    }
+    
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    
+    return callback(new Error('Not allowed by CORS'), false);
+  },
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
 }));
 
 // Raw body for webhook HMAC verification (must come before json parser)
@@ -46,6 +65,10 @@ app.use('/webhooks/ebay', express.text({ type: ['text/xml', 'application/xml', '
 // JSON for everything else
 app.use(express.json());
 
+// --- Security Middleware ---
+app.use(rateLimit);
+app.use('/api', apiKeyAuth); // Protect API routes with API key auth
+
 // --- Routes ---
 app.use(healthRoutes);
 app.use(apiRoutes);
@@ -57,6 +80,19 @@ app.use(ebayAuthRoutes);
 // Serve static frontend (built Vite app)
 const webDistPath = path.join(__dirname, '..', '..', 'dist', 'web');
 app.use(express.static(webDistPath));
+
+// Global error handler - prevent stack trace exposure
+app.use((err: any, req: any, res: any, next: any) => {
+  logError(`[Server] Unhandled error: ${err.message}`);
+  
+  // Don't expose stack traces in production
+  const isProduction = process.env.NODE_ENV === 'production';
+  
+  res.status(err.status || 500).json({
+    error: isProduction ? 'Internal server error' : err.message,
+    ...(isProduction ? {} : { stack: err.stack }),
+  });
+});
 
 // SPA fallback — serve index.html for any non-API route
 // Express 5 uses named catch-all params: {*path}
@@ -75,9 +111,6 @@ app.get('/{*path}', (req, res) => {
         endpoints: {
           health: '/health',
           api: '/api/status',
-          ebayWebhook: 'POST /webhooks/ebay/notifications',
-          shopifyWebhook: 'POST /webhooks/shopify/:topic',
-          auth: '/auth?shop=usedcameragear.myshopify.com',
         },
       });
     }
