@@ -70,6 +70,14 @@
 - **Includes**: Images, variants, inventory, weight, tags, description
 - **Purpose**: Rich data for eBay listing creation
 
+### 10. ✅ Attribute Mapping System
+- **Database**: `field_mappings` table for configurable mappings
+- **Types**: condition, category, field, inventory_location
+- **Intelligence**: Exact match → partial match → default fallback
+- **API**: Full CRUD endpoints for managing mappings
+- **Seeded**: 45+ default mappings for immediate use
+- **Impact**: No more hardcoded mappers - fully configurable
+
 ## 📊 SETTINGS ADDED
 
 | Setting | Default | Purpose |
@@ -87,6 +95,8 @@
 - **Type Safety**: Enhanced TypeScript interfaces
 - **Performance**: Date-filtered queries prevent massive data fetches
 - **Webhook Security**: HMAC verification for all Shopify webhooks
+- **Database Migrations**: Auto-creates field_mappings table with seeded defaults
+- **Configurable Mappings**: Replace hardcoded business logic with DB-driven rules
 
 ## 🧪 TESTING
 
@@ -106,6 +116,14 @@ curl -X POST "http://localhost:3000/api/sync/inventory?dry=true"
 curl -X POST "http://localhost:3000/api/listings/link" \
   -H "Content-Type: application/json" \
   -d '{"shopifyProductId": "123", "ebayListingId": "456", "sku": "CAM-001"}'
+
+# View all mappings
+curl "http://localhost:3000/api/mappings"
+
+# Create custom condition mapping
+curl -X POST "http://localhost:3000/api/mappings" \
+  -H "Content-Type: application/json" \
+  -d '{"mappingType": "condition", "sourceValue": "Refurbished", "targetValue": "LIKE_NEW"}'
 ```
 
 ## ⚠️ DEPLOYMENT NOTES
