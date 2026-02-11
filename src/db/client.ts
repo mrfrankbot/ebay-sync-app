@@ -157,7 +157,8 @@ const seedDefaultMappings = async (sqlite: InstanceType<typeof Database>) => {
   const allMappings = [...salesMappings, ...listingMappings, ...shippingMappings, ...paymentMappings];
   
   for (const mapping of allMappings) {
-    insert.run(...mapping);
+    // better-sqlite3 can bind null, but ensure no undefined values
+    insert.run(...mapping.map(v => v === undefined ? null : v));
   }
 };
 

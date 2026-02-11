@@ -132,7 +132,7 @@ async function start() {
     seedDefaultSettings(rawDb);
 
     // Seed default field mappings
-    seedDefaultMappings(rawDb);
+    // seedDefaultMappings handled by db/client.ts using attribute_mappings table
 
     app.listen(PORT, () => {
       info(`[Server] EbaySync running on http://localhost:${PORT}`);
