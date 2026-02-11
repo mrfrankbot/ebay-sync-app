@@ -127,4 +127,74 @@ router.post('/api/sync/trigger', async (_req: Request, res: Response) => {
   }
 });
 
+/** POST /api/orders/cleanup — Delete all synced orders from Shopify and clear local DB */
+router.post('/api/orders/cleanup', async (req: Request, res: Response) => {
+  try {
+    const db = await getRawDb();
+    const dryRun = req.query.dry === 'true';
+
+    // Get Shopify access token
+    const tokenRow = db.prepare(`SELECT access_token FROM auth_tokens WHERE platform = 'shopify'`).get() as any;
+    if (!tokenRow?.access_token) {
+      res.status(400).json({ error: 'No Shopify token found. Complete OAuth first.' });
+      return;
+    }
+
+    // Get all synced order IDs
+    const orders = db.prepare(`SELECT id, shopify_order_id, shopify_order_name FROM order_mappings ORDER BY id`).all() as any[];
+    
+    if (dryRun) {
+      res.json({ dryRun: true, count: orders.length, orders: orders.map(o => o.shopify_order_name) });
+      return;
+    }
+
+    const results: { id: string; name: string; status: string; error?: string }[] = [];
+    let deleted = 0;
+    let failed = 0;
+
+    for (const order of orders) {
+      try {
+        // First cancel the order (required before delete)
+        await fetch(`https://usedcameragear.myshopify.com/admin/api/2024-01/orders/${order.shopify_order_id}/cancel.json`, {
+          method: 'POST',
+          headers: {
+            'X-Shopify-Access-Token': tokenRow.access_token,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        // Then delete it
+        const delRes = await fetch(`https://usedcameragear.myshopify.com/admin/api/2024-01/orders/${order.shopify_order_id}.json`, {
+          method: 'DELETE',
+          headers: { 'X-Shopify-Access-Token': tokenRow.access_token },
+        });
+
+        if (delRes.ok || delRes.status === 404) {
+          deleted++;
+          results.push({ id: order.shopify_order_id, name: order.shopify_order_name, status: 'deleted' });
+        } else {
+          const errText = await delRes.text();
+          failed++;
+          results.push({ id: order.shopify_order_id, name: order.shopify_order_name, status: 'failed', error: errText });
+        }
+
+        // Rate limit: Shopify allows 2 req/sec
+        await new Promise(r => setTimeout(r, 600));
+      } catch (err) {
+        failed++;
+        results.push({ id: order.shopify_order_id, name: order.shopify_order_name, status: 'error', error: String(err) });
+      }
+    }
+
+    // Clear local order mappings and sync log
+    db.prepare(`DELETE FROM order_mappings`).run();
+    db.prepare(`DELETE FROM sync_log`).run();
+    info(`[API] Cleanup complete: ${deleted} deleted, ${failed} failed out of ${orders.length}`);
+
+    res.json({ ok: true, total: orders.length, deleted, failed, results: results.slice(0, 10) });
+  } catch (err) {
+    res.status(500).json({ error: 'Cleanup failed', detail: String(err) });
+  }
+});
+
 export default router;
