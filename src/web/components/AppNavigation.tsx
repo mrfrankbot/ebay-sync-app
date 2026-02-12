@@ -1,0 +1,127 @@
+import React from 'react';
+import { Navigation } from '@shopify/polaris';
+import { useLocation, useNavigate } from 'react-router-dom';
+import {
+  Home,
+  Package,
+  ShoppingCart,
+  Settings as SettingsIcon,
+  BarChart3,
+  GitBranch,
+  Image,
+  Workflow,
+  Store,
+  Tag,
+} from 'lucide-react';
+
+const AppNavigation: React.FC = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const isSelected = (path: string) => location.pathname === path;
+  const isInSection = (paths: string[]) => paths.some((p) => location.pathname.startsWith(p));
+
+  return (
+    <Navigation location={location.pathname}>
+      {/* Dashboard — top level */}
+      <Navigation.Section
+        items={[
+          {
+            label: 'Dashboard',
+            icon: undefined,
+            selected: isSelected('/'),
+            onClick: () => navigate('/'),
+            url: '/',
+          },
+        ]}
+      />
+
+      {/* Shopify section */}
+      <Navigation.Section
+        title="Shopify"
+        items={[
+          {
+            label: 'Products',
+            icon: undefined,
+            selected: isSelected('/listings') || location.pathname.startsWith('/listings/'),
+            onClick: () => navigate('/listings'),
+            url: '/listings',
+          },
+        ]}
+      />
+
+      {/* eBay section */}
+      <Navigation.Section
+        title="eBay"
+        items={[
+          {
+            label: 'Listings',
+            icon: undefined,
+            selected: isSelected('/ebay/listings'),
+            onClick: () => navigate('/ebay/listings'),
+            url: '/ebay/listings',
+          },
+          {
+            label: 'Orders',
+            icon: undefined,
+            selected: isSelected('/orders'),
+            onClick: () => navigate('/orders'),
+            url: '/orders',
+          },
+          {
+            label: 'Mappings',
+            icon: undefined,
+            selected: isSelected('/mappings'),
+            onClick: () => navigate('/mappings'),
+            url: '/mappings',
+          },
+        ]}
+      />
+
+      {/* Pipeline section */}
+      <Navigation.Section
+        title="Pipeline"
+        items={[
+          {
+            label: 'Overview',
+            icon: undefined,
+            selected: isSelected('/pipeline'),
+            onClick: () => navigate('/pipeline'),
+            url: '/pipeline',
+          },
+          {
+            label: 'Images',
+            icon: undefined,
+            selected: isSelected('/images'),
+            onClick: () => navigate('/images'),
+            url: '/images',
+          },
+        ]}
+      />
+
+      {/* Settings & Analytics section */}
+      <Navigation.Section
+        title="Settings & Analytics"
+        separator
+        items={[
+          {
+            label: 'Analytics',
+            icon: undefined,
+            selected: isSelected('/logs'),
+            onClick: () => navigate('/logs'),
+            url: '/logs',
+          },
+          {
+            label: 'Settings',
+            icon: undefined,
+            selected: isSelected('/settings'),
+            onClick: () => navigate('/settings'),
+            url: '/settings',
+          },
+        ]}
+      />
+    </Navigation>
+  );
+};
+
+export default AppNavigation;

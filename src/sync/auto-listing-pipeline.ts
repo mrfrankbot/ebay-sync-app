@@ -1,8 +1,17 @@
 import OpenAI from 'openai';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { fetchDetailedShopifyProduct } from '../shopify/products.js';
 import { saveProductOverride } from './attribute-mapping-service.js';
 import { getRawDb } from '../db/client.js';
 import { info, warn, error as logError } from '../utils/logger.js';
+import { PhotoRoomService } from '../services/photoroom.js';
+import {
+  createPipelineJob,
+  startPipelineJob,
+  updatePipelineStep,
+} from './pipeline-status.js';
 
 // ---------------------------------------------------------------------------
 // OpenAI client (lazy singleton)
@@ -101,19 +110,53 @@ async function suggestCategory(
 }
 
 // ---------------------------------------------------------------------------
-// processProductImages — return Shopify image URLs (PhotoRoom later)
+// processProductImages — render each image through PhotoRoom template
 // ---------------------------------------------------------------------------
 
-// TODO: Integrate PhotoRoom API to automatically remove backgrounds,
-// enhance product images, and create professional white-background photos
-// before sending to eBay. PhotoRoom API: https://www.photoroom.com/api
+/**
+ * Process product images via PhotoRoom template rendering.
+ *
+ * If PHOTOROOM_API_KEY is not set, falls back to returning the original
+ * Shopify image URLs (no processing). Processed images are saved to a local
+ * temp directory and their file paths are returned.
+ */
 export async function processProductImages(
   shopifyProduct: any,
 ): Promise<string[]> {
   const images = shopifyProduct.images || [];
-  return images
+  const imageUrls: string[] = images
     .map((img: any) => (img.url || img.src || '').replace(/^http:/, 'https:'))
     .filter((url: string) => url.length > 0);
+
+  const apiKey = process.env.PHOTOROOM_API_KEY;
+  if (!apiKey) {
+    info('[AutoList] No PHOTOROOM_API_KEY — skipping image processing, using originals');
+    return imageUrls;
+  }
+
+  const photoroom = new PhotoRoomService(apiKey);
+  const tmpDir = path.join(os.tmpdir(), 'ebay-sync-images', shopifyProduct.id?.toString() || 'unknown');
+  fs.mkdirSync(tmpDir, { recursive: true });
+
+  const processedPaths: string[] = [];
+
+  for (let i = 0; i < imageUrls.length; i++) {
+    const url = imageUrls[i];
+    try {
+      info(`[AutoList] Rendering image ${i + 1}/${imageUrls.length} with PhotoRoom template`);
+      const buf = await photoroom.renderWithTemplate(url);
+      const filePath = path.join(tmpDir, `image_${i}.png`);
+      fs.writeFileSync(filePath, buf);
+      processedPaths.push(filePath);
+      info(`[AutoList] Saved processed image → ${filePath}`);
+    } catch (err) {
+      warn(`[AutoList] PhotoRoom render failed for image ${i + 1}, using original URL: ${err}`);
+      processedPaths.push(url); // fallback to original
+    }
+  }
+
+  info(`[AutoList] Image processing complete: ${processedPaths.length}/${imageUrls.length}`);
+  return processedPaths;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,67 +165,105 @@ export async function processProductImages(
 
 export async function autoListProduct(
   shopifyProductId: string,
-): Promise<{ success: boolean; description?: string; categoryId?: string; error?: string }> {
-  try {
-    info(`[AutoList] Processing product ${shopifyProductId}...`);
+): Promise<{
+  success: boolean;
+  jobId?: string;
+  description?: string;
+  categoryId?: string;
+  images?: string[];
+  error?: string;
+}> {
+  const jobId = createPipelineJob(shopifyProductId);
 
-    // Get Shopify token from DB
+  try {
+    info(`[AutoList] Processing product ${shopifyProductId} (job ${jobId})...`);
+    startPipelineJob(jobId);
+
+    // ── Step 1: Fetch product ──────────────────────────────────────────
+    updatePipelineStep(jobId, 'fetch_product', 'running');
+
     const db = await getRawDb();
     const tokenRow = db
       .prepare(`SELECT access_token FROM auth_tokens WHERE platform = 'shopify'`)
       .get() as any;
 
     if (!tokenRow?.access_token) {
-      return { success: false, error: 'Shopify token not found' };
+      updatePipelineStep(jobId, 'fetch_product', 'error', 'Shopify token not found');
+      return { success: false, jobId, error: 'Shopify token not found' };
     }
 
-    // Fetch product from Shopify
     const product = await fetchDetailedShopifyProduct(tokenRow.access_token, shopifyProductId);
     if (!product) {
-      return { success: false, error: `Product ${shopifyProductId} not found in Shopify` };
+      updatePipelineStep(jobId, 'fetch_product', 'error', 'Product not found in Shopify');
+      return { success: false, jobId, error: `Product ${shopifyProductId} not found in Shopify` };
     }
 
-    // Run AI pipeline
+    updatePipelineStep(jobId, 'fetch_product', 'done', `Fetched: ${product.title || shopifyProductId}`);
+
+    // ── Step 2: Generate description + category ────────────────────────
+    updatePipelineStep(jobId, 'generate_description', 'running');
+
     const result = await processNewProduct(product);
 
     if (!result.ready) {
       warn(`[AutoList] AI processing incomplete for product ${shopifyProductId}`);
+      updatePipelineStep(jobId, 'generate_description', 'error', 'Incomplete AI results');
       return {
         success: false,
+        jobId,
         description: result.description || undefined,
         categoryId: result.ebayCategory || undefined,
         error: 'AI processing did not return complete results',
       };
     }
 
-    // Save description as product override
-    await saveProductOverride(
-      shopifyProductId,
-      'listing',
-      'description',
-      result.description,
+    updatePipelineStep(
+      jobId,
+      'generate_description',
+      'done',
+      `Description: ${result.description.length} chars, Category: ${result.ebayCategory}`,
     );
 
-    // Save category as product override
-    await saveProductOverride(
-      shopifyProductId,
-      'listing',
-      'primary_category',
-      result.ebayCategory,
-    );
+    // ── Step 3: Process images via PhotoRoom ───────────────────────────
+    updatePipelineStep(jobId, 'process_images', 'running');
+
+    let processedImages: string[] = [];
+    try {
+      processedImages = await processProductImages(product);
+      updatePipelineStep(
+        jobId,
+        'process_images',
+        'done',
+        `${processedImages.length} images processed`,
+      );
+    } catch (imgErr) {
+      warn(`[AutoList] Image processing error (non-fatal): ${imgErr}`);
+      updatePipelineStep(jobId, 'process_images', 'error', String(imgErr));
+      // Non-fatal — continue without processed images
+    }
+
+    // ── Step 4: Save overrides (create_ebay_listing placeholder) ──────
+    updatePipelineStep(jobId, 'create_ebay_listing', 'running');
+
+    await saveProductOverride(shopifyProductId, 'listing', 'description', result.description);
+    await saveProductOverride(shopifyProductId, 'listing', 'primary_category', result.ebayCategory);
+
+    updatePipelineStep(jobId, 'create_ebay_listing', 'done', 'Overrides saved');
 
     info(
-      `[AutoList] ✅ Product ${shopifyProductId} processed — category=${result.ebayCategory}, description=${result.description.length} chars`,
+      `[AutoList] ✅ Product ${shopifyProductId} processed (job ${jobId}) — category=${result.ebayCategory}, description=${result.description.length} chars, images=${processedImages.length}`,
     );
 
     return {
       success: true,
+      jobId,
       description: result.description,
       categoryId: result.ebayCategory,
+      images: processedImages,
     };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
-    logError(`[AutoList] Failed for product ${shopifyProductId}: ${errorMsg}`);
-    return { success: false, error: errorMsg };
+    logError(`[AutoList] Failed for product ${shopifyProductId} (job ${jobId}): ${errorMsg}`);
+    return { success: false, jobId, error: errorMsg };
   }
 }

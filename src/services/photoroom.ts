@@ -127,6 +127,47 @@ export class PhotoRoomService {
     return results;
   }
 
+  // ── Render with template ──────────────────────────────────────────────
+
+  /**
+   * Render an image using a PhotoRoom template.
+   *
+   * Endpoint: POST https://image-api.photoroom.com/v1/render
+   * Accepts `templateId` + `imageUrl` (or imageFile) via multipart/form-data.
+   * Returns the rendered image as a Buffer.
+   */
+  async renderWithTemplate(
+    imageUrl: string,
+    templateId?: string,
+  ): Promise<Buffer> {
+    const tplId =
+      templateId ||
+      process.env.PHOTOROOM_TEMPLATE_ID ||
+      '014ca360-cb57-416e-8c17-365a647ca4ac';
+
+    info(`[PhotoRoom] Rendering with template ${tplId}: ${imageUrl}`);
+
+    const formData = new FormData();
+    formData.append('templateId', tplId);
+    formData.append('imageUrl', imageUrl);
+
+    const response = await fetch('https://image-api.photoroom.com/v1/render', {
+      method: 'POST',
+      headers: { 'x-api-key': this.apiKey },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      logError(`[PhotoRoom] Template render failed (${response.status}): ${text}`);
+      throw new Error(`PhotoRoom template render failed: ${response.status} — ${text}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    info(`[PhotoRoom] Template render successful (${arrayBuffer.byteLength} bytes)`);
+    return Buffer.from(arrayBuffer);
+  }
+
   // ── Helpers ──────────────────────────────────────────────────────────
 
   private async downloadImage(url: string): Promise<Buffer> {
