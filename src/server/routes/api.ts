@@ -916,4 +916,122 @@ router.post('/api/test/add-image', async (req: Request, res: Response) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// AI Listing Management Endpoints
+// ---------------------------------------------------------------------------
+
+/** POST /api/listings/republish-stale — Republish listings older than N days */
+router.post('/api/listings/republish-stale', async (req: Request, res: Response) => {
+  try {
+    const db = await getRawDb();
+    const maxAgeDays = parseInt(req.body.maxAgeDays as string) || 30;
+
+    const ebayRow = db.prepare(`SELECT access_token FROM auth_tokens WHERE platform = 'ebay'`).get() as any;
+    if (!ebayRow?.access_token) {
+      res.status(400).json({ error: 'eBay token not found. Complete OAuth first.' });
+      return;
+    }
+
+    info(`[API] Republish stale listings triggered (maxAge: ${maxAgeDays} days)`);
+    res.json({ ok: true, message: `Republishing listings older than ${maxAgeDays} days`, maxAgeDays });
+
+    // Run in background
+    try {
+      const { republishStaleListings } = await import('../../sync/listing-manager.js');
+      const result = await republishStaleListings(ebayRow.access_token, maxAgeDays);
+      info(`[API] Republish complete: ${result.republished} republished, ${result.skipped} skipped, ${result.failed} failed`);
+    } catch (err) {
+      info(`[API] Republish error: ${err}`);
+    }
+  } catch (err) {
+    res.status(500).json({ error: 'Republish failed', detail: String(err) });
+  }
+});
+
+/** POST /api/listings/apply-price-drops — Apply price drops to eligible listings */
+router.post('/api/listings/apply-price-drops', async (req: Request, res: Response) => {
+  try {
+    const db = await getRawDb();
+
+    const ebayRow = db.prepare(`SELECT access_token FROM auth_tokens WHERE platform = 'ebay'`).get() as any;
+    if (!ebayRow?.access_token) {
+      res.status(400).json({ error: 'eBay token not found. Complete OAuth first.' });
+      return;
+    }
+
+    info(`[API] Price drop schedule triggered`);
+    res.json({ ok: true, message: 'Applying price drops to eligible listings' });
+
+    // Run in background
+    try {
+      const { applyPriceDropSchedule } = await import('../../sync/listing-manager.js');
+      const result = await applyPriceDropSchedule(ebayRow.access_token);
+      info(`[API] Price drops complete: ${result.dropped} dropped, ${result.skipped} skipped, ${result.failed} failed`);
+    } catch (err) {
+      info(`[API] Price drop error: ${err}`);
+    }
+  } catch (err) {
+    res.status(500).json({ error: 'Price drop failed', detail: String(err) });
+  }
+});
+
+/** GET /api/listings/stale — Get listings eligible for action (older than N days) */
+router.get('/api/listings/stale', async (req: Request, res: Response) => {
+  try {
+    const maxAgeDays = parseInt(req.query.days as string) || 14;
+
+    const { getStaleListings } = await import('../../sync/listing-manager.js');
+    const listings = await getStaleListings(maxAgeDays);
+
+    res.json({ data: listings, total: listings.length, maxAgeDays });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch stale listings', detail: String(err) });
+  }
+});
+
+/** GET /api/listings/health — Listing health dashboard data */
+router.get('/api/listings/health', async (_req: Request, res: Response) => {
+  try {
+    const { getListingHealth } = await import('../../sync/listing-manager.js');
+    const health = await getListingHealth();
+    res.json(health);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch listing health', detail: String(err) });
+  }
+});
+
+/** POST /api/listings/promote — Enable Promoted Listings for given listing IDs */
+router.post('/api/listings/promote', async (req: Request, res: Response) => {
+  try {
+    const db = await getRawDb();
+    const { listingIds, adRate } = req.body;
+
+    if (!Array.isArray(listingIds) || listingIds.length === 0) {
+      res.status(400).json({ error: 'listingIds array required in request body' });
+      return;
+    }
+
+    const ebayRow = db.prepare(`SELECT access_token FROM auth_tokens WHERE platform = 'ebay'`).get() as any;
+    if (!ebayRow?.access_token) {
+      res.status(400).json({ error: 'eBay token not found. Complete OAuth first.' });
+      return;
+    }
+
+    const effectiveRate = parseFloat(adRate) || 2.0;
+    info(`[API] Promoted Listings triggered for ${listingIds.length} listings at ${effectiveRate}%`);
+    res.json({ ok: true, message: `Promoting ${listingIds.length} listings at ${effectiveRate}% ad rate`, listingIds, adRate: effectiveRate });
+
+    // Run in background
+    try {
+      const { enablePromotedListings } = await import('../../sync/listing-manager.js');
+      const result = await enablePromotedListings(ebayRow.access_token, listingIds, effectiveRate);
+      info(`[API] Promote complete: ${result.promoted} promoted, ${result.failed} failed`);
+    } catch (err) {
+      info(`[API] Promote error: ${err}`);
+    }
+  } catch (err) {
+    res.status(500).json({ error: 'Promote failed', detail: String(err) });
+  }
+});
+
 export default router;

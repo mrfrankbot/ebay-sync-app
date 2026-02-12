@@ -200,6 +200,11 @@ function seedDefaultSettings(db: import('better-sqlite3').Database) {
     sync_interval_minutes: '5',
     auto_sync_enabled: 'false',  // MUST be explicitly enabled
     item_location: '305 W 700 S, Salt Lake City, UT 84101',
+    // AI Listing Management
+    listing_management_enabled: 'false',  // MUST be explicitly enabled
+    republish_max_age_days: '30',
+    price_drop_after_days: '14',
+    price_drop_percent: '10',
   };
 
   const stmt = db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`);
@@ -342,6 +347,19 @@ async function runBackgroundSync() {
     }
   } catch (err) {
     logError(`[Scheduler] Background sync error: ${err}`);
+  }
+
+  // Run AI listing management (republish stale, price drops)
+  try {
+    const { getValidEbayToken } = await import('../ebay/token-manager.js');
+    const ebayToken = await getValidEbayToken();
+    if (ebayToken) {
+      const { runListingManagement } = await import('../sync/listing-manager.js');
+      const mgmtResult = await runListingManagement(ebayToken);
+      info(`[Scheduler] Listing management: republished=${mgmtResult.republish.republished}, price_drops=${mgmtResult.priceDrop.dropped}`);
+    }
+  } catch (err) {
+    logError(`[Scheduler] Listing management error: ${err}`);
   }
 }
 

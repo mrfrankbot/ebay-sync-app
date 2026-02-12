@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 export const productMappings = sqliteTable('product_mappings', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -6,6 +6,10 @@ export const productMappings = sqliteTable('product_mappings', {
   ebayListingId: text('ebay_listing_id').notNull(),
   ebayInventoryItemId: text('ebay_inventory_item_id'),
   status: text('status').default('active'),
+  originalPrice: real('original_price'),               // Track original price for price drops
+  lastRepublishedAt: integer('last_republished_at', { mode: 'timestamp' }),
+  promotedAt: integer('promoted_at', { mode: 'timestamp' }),
+  adRate: real('ad_rate'),                              // Promoted listings ad rate %
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 });

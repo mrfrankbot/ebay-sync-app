@@ -26,6 +26,10 @@ const initTables = (sqlite: InstanceType<typeof Database>) => {
       ebay_listing_id TEXT NOT NULL,
       ebay_inventory_item_id TEXT,
       status TEXT DEFAULT 'active',
+      original_price REAL,
+      last_republished_at INTEGER,
+      promoted_at INTEGER,
+      ad_rate REAL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
@@ -162,11 +166,33 @@ const seedDefaultMappings = async (sqlite: InstanceType<typeof Database>) => {
   }
 };
 
+/**
+ * Migrate existing product_mappings table — add new columns if missing.
+ */
+const migrateProductMappings = (sqlite: InstanceType<typeof Database>) => {
+  const cols = sqlite.prepare(`PRAGMA table_info(product_mappings)`).all() as any[];
+  const colNames = new Set(cols.map((c: any) => c.name));
+
+  const migrations: [string, string][] = [
+    ['original_price', 'ALTER TABLE product_mappings ADD COLUMN original_price REAL'],
+    ['last_republished_at', 'ALTER TABLE product_mappings ADD COLUMN last_republished_at INTEGER'],
+    ['promoted_at', 'ALTER TABLE product_mappings ADD COLUMN promoted_at INTEGER'],
+    ['ad_rate', 'ALTER TABLE product_mappings ADD COLUMN ad_rate REAL'],
+  ];
+
+  for (const [colName, sql] of migrations) {
+    if (!colNames.has(colName)) {
+      sqlite.exec(sql);
+    }
+  }
+};
+
 export const getDb = async () => {
   if (!dbInstance) {
     const filePath = await ensureDbPath();
     rawSqlite = new Database(filePath);
     initTables(rawSqlite);
+    migrateProductMappings(rawSqlite);
     initExtraTables(rawSqlite);
     await seedDefaultMappings(rawSqlite);
     dbInstance = drizzle(rawSqlite, { schema });
