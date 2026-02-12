@@ -223,3 +223,95 @@ export const useSyncInventory = () => {
     },
   });
 };
+
+// New hooks for enhanced pages
+
+export const useListings = (params?: {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  status?: string[];
+}) => {
+  return useQuery({
+    queryKey: ['listings', params],
+    queryFn: () => {
+      const searchParams = new URLSearchParams();
+      if (params?.limit) searchParams.append('limit', params.limit.toString());
+      if (params?.offset) searchParams.append('offset', params.offset.toString());
+      if (params?.search) searchParams.append('search', params.search);
+      if (params?.status?.length) searchParams.append('status', params.status.join(','));
+      
+      return api.get(`/listings?${searchParams}`);
+    },
+    staleTime: 30000,
+  });
+};
+
+export const useListingHealth = () => {
+  return useQuery({
+    queryKey: ['listings-health'],
+    queryFn: () => api.get('/listings/health'),
+    staleTime: 60000,
+  });
+};
+
+export const useStaleListings = () => {
+  return useQuery({
+    queryKey: ['listings-stale'],
+    queryFn: () => api.get('/listings/stale'),
+    staleTime: 60000,
+  });
+};
+
+export const useOrdersWithParams = (params?: {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  status?: string[];
+  fulfillment?: string[];
+  startDate?: Date;
+  endDate?: Date;
+}) => {
+  return useQuery({
+    queryKey: ['orders', params],
+    queryFn: () => {
+      const searchParams = new URLSearchParams();
+      if (params?.limit) searchParams.append('limit', params.limit.toString());
+      if (params?.offset) searchParams.append('offset', params.offset.toString());
+      if (params?.search) searchParams.append('search', params.search);
+      if (params?.status?.length) searchParams.append('status', params.status.join(','));
+      if (params?.fulfillment?.length) searchParams.append('fulfillment', params.fulfillment.join(','));
+      if (params?.startDate) searchParams.append('startDate', params.startDate.toISOString());
+      if (params?.endDate) searchParams.append('endDate', params.endDate.toISOString());
+      
+      return api.get(`/orders?${searchParams}`);
+    },
+    staleTime: 30000,
+  });
+};
+
+export const useSettings = () => {
+  return useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.get('/settings'),
+    staleTime: 300000, // 5 minutes
+  });
+};
+
+export const useAuthStatus = () => {
+  return useQuery({
+    queryKey: ['auth-status'],
+    queryFn: async () => {
+      const [shopifyStatus, ebayStatus] = await Promise.all([
+        api.get('/status'),
+        api.get('/ebay/auth/status'),
+      ]);
+      return {
+        shopify: shopifyStatus,
+        ebay: ebayStatus,
+      };
+    },
+    refetchInterval: 30000,
+    staleTime: 10000,
+  });
+};
