@@ -15,6 +15,7 @@ import ebayAuthRoutes from './routes/ebay-auth.js';
 import chatRoutes from './routes/chat.js';
 import pipelineRoutes from './routes/pipeline.js';
 import { apiKeyAuth, rateLimit } from './middleware/auth.js';
+import { getCapabilities, getNewCapabilities } from './capabilities.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -80,6 +81,14 @@ app.use(shopifyAuthRoutes);
 app.use(ebayAuthRoutes);
 app.use(chatRoutes);
 app.use(pipelineRoutes);
+
+// --- Capabilities discovery endpoint ---
+app.get('/api/capabilities', (_req, res) => {
+  res.json({
+    capabilities: getCapabilities(),
+    newCapabilities: getNewCapabilities(),
+  });
+});
 
 // Serve static frontend (built Vite app)
 const webDistPath = path.join(__dirname, '..', '..', 'dist', 'web');

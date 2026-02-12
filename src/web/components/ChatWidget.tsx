@@ -39,15 +39,25 @@ const suggestions = [
   'show settings',
 ];
 
-// Quick action pills for the welcome screen
-const welcomeQuickActions = [
-  { label: '📊 Show status', message: 'show status' },
-  { label: '📦 List products', message: 'list products' },
-  { label: '🔄 Sync all products', message: 'sync all products' },
-  { label: '📋 Show orders', message: 'show orders' },
-  { label: '⚙️ Check mappings', message: 'show mappings' },
-  { label: '🏥 Listing health check', message: 'show listing health' },
+// Fallback quick actions (used until capabilities API responds)
+const defaultQuickActions = [
+  { label: '📊 Show status', message: 'show status', isNew: false },
+  { label: '📦 List products', message: 'list products', isNew: false },
+  { label: '🔄 Sync all products', message: 'sync all products', isNew: false },
+  { label: '📋 Show orders', message: 'show orders', isNew: false },
+  { label: '⚙️ Check mappings', message: 'show mappings', isNew: false },
+  { label: '🏥 Listing health check', message: 'show listing health', isNew: false },
 ];
+
+// Category emoji map
+const categoryEmoji: Record<string, string> = {
+  shopify: '🛍️',
+  ebay: '📦',
+  pipeline: '🔄',
+  images: '🖼️',
+  analytics: '📊',
+  settings: '⚙️',
+};
 
 // Page-specific contextual quick actions
 const pageQuickActions: Record<string, Array<{ label: string; message: string }>> = {
@@ -87,8 +97,45 @@ const ChatWidget: React.FC = () => {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [filteredSuggestions, setFilteredSuggestions] = useState<string[]>([]);
   const [navToast, setNavToast] = useState<string | null>(null);
+  const [welcomeQuickActions, setWelcomeQuickActions] = useState(defaultQuickActions);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Fetch capabilities on mount to build dynamic quick-action pills
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/capabilities')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data?.capabilities) return;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const caps = data.capabilities as Array<{
+          id: string;
+          name: string;
+          category: string;
+          examplePrompts: string[];
+          isNew?: boolean;
+        }>;
+        // Pick one representative prompt per capability, limit to 8
+        const pills = caps
+          .filter((c) => c.examplePrompts.length > 0)
+          .slice(0, 8)
+          .map((c) => ({
+            label: `${categoryEmoji[c.category] || '🔹'} ${c.name}`,
+            message: c.examplePrompts[0],
+            isNew: !!c.isNew,
+          }));
+        if (pills.length > 0) {
+          setWelcomeQuickActions(pills);
+        }
+      })
+      .catch(() => {
+        /* keep defaults */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -633,6 +680,21 @@ const ChatWidget: React.FC = () => {
                     }}
                   >
                     {qa.label}
+                    {qa.isNew && (
+                      <span
+                        style={{
+                          marginLeft: '6px',
+                          fontSize: '10px',
+                          backgroundColor: '#ff6b00',
+                          color: 'white',
+                          padding: '1px 6px',
+                          borderRadius: '8px',
+                          fontWeight: 600,
+                        }}
+                      >
+                        ✨ New
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>

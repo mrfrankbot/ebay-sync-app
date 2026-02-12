@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { info, error as logError } from '../../utils/logger.js';
+import { getCapabilities } from '../capabilities.js';
 
 const router = Router();
 
@@ -19,6 +20,45 @@ const PAGE_CONTEXT = `Available pages: / (Dashboard), /listings (Products), /lis
 function buildPageAwareBlock(currentPage?: string): string {
   if (!currentPage) return '';
   return `\nThe user is currently viewing: ${currentPage}\n${PAGE_CONTEXT}\n`;
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic capabilities block (auto-populated from registry)
+// ---------------------------------------------------------------------------
+function buildCapabilitiesBlock(): string {
+  const caps = getCapabilities();
+  const grouped = new Map<string, typeof caps>();
+  for (const cap of caps) {
+    const list = grouped.get(cap.category) || [];
+    list.push(cap);
+    grouped.set(cap.category, list);
+  }
+
+  let block = '\n## Available Capabilities\n';
+  block += 'Below is the full list of things this app can do. When a user asks for help, use this list to suggest relevant features.\n\n';
+
+  for (const [category, items] of grouped) {
+    block += `### ${category.charAt(0).toUpperCase() + category.slice(1)}\n`;
+    for (const cap of items) {
+      const prefix = cap.isNew ? '🆕 NEW: ' : '';
+      block += `- ${prefix}**${cap.name}** — ${cap.description}\n`;
+      block += `  Endpoints: ${cap.apiEndpoints.join(', ')}\n`;
+      block += `  Example prompts: ${cap.examplePrompts.map((p) => `"${p}"`).join(', ')}\n`;
+    }
+    block += '\n';
+  }
+
+  const newCaps = caps.filter((c) => c.isNew);
+  if (newCaps.length > 0) {
+    block += '### Recently Added\n';
+    block += 'Proactively mention these new features when they are relevant to the conversation:\n';
+    for (const cap of newCaps) {
+      block += `- 🆕 **${cap.name}** — ${cap.description}\n`;
+    }
+    block += '\n';
+  }
+
+  return block;
 }
 
 // ---------------------------------------------------------------------------
@@ -43,18 +83,8 @@ function buildShellSystemPrompt(currentPage?: string): string {
 You have access to a shell environment. You can run commands to help the user manage their product listings, orders, and sync operations.
 ${buildPageAwareBlock(currentPage)}
 ## Internal API (running at http://localhost:${PORT})
-You can use curl to hit these endpoints:
-- GET  /api/status              — app sync status
-- GET  /api/listings            — list eBay listings
-- GET  /api/listings/stale      — show stale listings
-- GET  /api/listings/health     — listing health report
-- POST /api/listings/republish-stale — republish stale listings
-- POST /api/listings/apply-price-drops — apply price drops
-- GET  /api/mappings            — show category/field mappings
-- PUT  /api/mappings/:category/:field_name — update a mapping
-- POST /api/sync/products       — sync products (body: { "productIds": ["id1","id2"] })
-- GET  /api/orders              — list orders
-- GET  /api/settings            — show app settings
+You can use curl to hit these endpoints. The full list is below in "Available Capabilities".
+${buildCapabilitiesBlock()}
 ${NAVIGATION_INSTRUCTIONS}
 ## Rules
 - NEVER sync orders without a date filter. Do not call POST /api/sync/trigger without an explicit date range.
@@ -84,19 +114,7 @@ function buildFallbackSystemPrompt(currentPage?: string): string {
 
 You have access to internal API endpoints. When the user asks you to do something, determine which API to call, call it, and report the results in a friendly way.
 ${buildPageAwareBlock(currentPage)}
-Available capabilities:
-- "sync products" → POST /api/sync/products (requires { productIds: string[] } body — if user doesn't specify, explain this)
-- "show status" / "check status" → GET /api/status
-- "list products" / "show listings" → GET /api/listings
-- "show mappings" → GET /api/mappings
-- "update mapping" → PUT /api/mappings/:category/:field_name (body: { mapping_type, source_value, target_value })
-- "show orders" / "list orders" → GET /api/orders
-- "sync orders" → POST /api/sync/trigger
-- "show settings" → GET /api/settings
-- "show stale listings" → GET /api/listings/stale
-- "show listing health" → GET /api/listings/health
-- "republish stale listings" → POST /api/listings/republish-stale
-- "apply price drops" → POST /api/listings/apply-price-drops
+${buildCapabilitiesBlock()}
 ${NAVIGATION_INSTRUCTIONS}
 Respond with a JSON object (and ONLY a JSON object, no markdown fences):
 {
