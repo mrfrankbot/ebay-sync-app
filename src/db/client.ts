@@ -103,6 +103,17 @@ const initExtraTables = (sqlite: InstanceType<typeof Database>) => {
       updated_at TEXT DEFAULT (datetime('now')),
       UNIQUE(shopify_product_id, category, field_name)
     );
+    CREATE TABLE IF NOT EXISTS help_questions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      question TEXT NOT NULL,
+      answer TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      asked_by TEXT,
+      answered_by TEXT,
+      category TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
   `);
 };
 

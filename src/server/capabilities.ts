@@ -212,6 +212,16 @@ registerCapability({
 });
 
 registerCapability({
+  id: 'help-faq',
+  name: 'Help & FAQ',
+  description: 'Browse frequently asked questions or submit a new question for support.',
+  category: 'settings',
+  examplePrompts: ['help', 'FAQ', 'ask a question', 'how do I', 'frequently asked questions'],
+  apiEndpoints: ['GET /api/help/faq', 'POST /api/help/questions', 'GET /api/help/questions'],
+  addedAt: '2026-02-12',
+});
+
+registerCapability({
   id: 'status',
   name: 'System Status',
   description: 'Quick overview of connections, product counts, order counts, and uptime.',

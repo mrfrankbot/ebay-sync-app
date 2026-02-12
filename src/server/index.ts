@@ -14,6 +14,7 @@ import shopifyAuthRoutes from './routes/shopify-auth.js';
 import ebayAuthRoutes from './routes/ebay-auth.js';
 import chatRoutes from './routes/chat.js';
 import pipelineRoutes from './routes/pipeline.js';
+import helpRoutes from './routes/help.js';
 import { apiKeyAuth, rateLimit } from './middleware/auth.js';
 import { getCapabilities, getNewCapabilities } from './capabilities.js';
 
@@ -81,6 +82,7 @@ app.use(shopifyAuthRoutes);
 app.use(ebayAuthRoutes);
 app.use(chatRoutes);
 app.use(pipelineRoutes);
+app.use(helpRoutes);
 
 // --- Capabilities discovery endpoint ---
 app.get('/api/capabilities', (_req, res) => {

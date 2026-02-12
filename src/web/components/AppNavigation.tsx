@@ -118,6 +118,25 @@ const AppNavigation: React.FC = () => {
             onClick: () => navigate('/settings'),
             url: '/settings',
           },
+          {
+            label: 'Help',
+            icon: undefined,
+            selected: isSelected('/help') || isSelected('/help/admin'),
+            onClick: () => navigate('/help'),
+            url: '/help',
+            subNavigationItems: [
+              {
+                label: 'FAQ',
+                url: '/help',
+                onClick: () => navigate('/help'),
+              },
+              {
+                label: 'Admin',
+                url: '/help/admin',
+                onClick: () => navigate('/help/admin'),
+              },
+            ],
+          },
         ]}
       />
     </Navigation>

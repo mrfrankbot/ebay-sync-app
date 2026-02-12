@@ -11,6 +11,8 @@ import Analytics from './pages/Analytics';
 import Mappings from './pages/Mappings';
 import ImageProcessor from './pages/ImageProcessor';
 import Pipeline from './pages/Pipeline';
+import Help from './pages/Help';
+import HelpAdmin from './pages/HelpAdmin';
 import AppNavigation from './components/AppNavigation';
 import ChatWidget from './components/ChatWidget';
 import { useAppStore } from './store';
@@ -58,6 +60,8 @@ const AppFrame: React.FC = () => {
         <Route path="/images" element={<ImageProcessor />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/logs" element={<Analytics />} />
+        <Route path="/help" element={<Help />} />
+        <Route path="/help/admin" element={<HelpAdmin />} />
       </Routes>
 
       <ChatWidget />
