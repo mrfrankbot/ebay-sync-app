@@ -6,6 +6,10 @@ import { loadShopifyCredentials } from '../../config/credentials.js';
 
 const router = Router();
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 async function verifyShopifyWebhook(req: Request): Promise<boolean> {
   try {
     const creds = await loadShopifyCredentials();
@@ -29,6 +33,60 @@ async function verifyShopifyWebhook(req: Request): Promise<boolean> {
     return false;
   }
 }
+
+/** Get tokens for both platforms from the auth_tokens table. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getTokens(db: any): Promise<{
+  ebayToken: string | null;
+  shopifyToken: string | null;
+}> {
+  const ebayRow = db.prepare(`SELECT access_token FROM auth_tokens WHERE platform = 'ebay'`).get() as any;
+  const shopifyRow = db.prepare(`SELECT access_token FROM auth_tokens WHERE platform = 'shopify'`).get() as any;
+  return {
+    ebayToken: ebayRow?.access_token ?? null,
+    shopifyToken: shopifyRow?.access_token ?? null,
+  };
+}
+
+/** Mark a notification_log entry as processed. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function markProcessed(db: any, topic: string, source = 'shopify') {
+  db.prepare(
+    `UPDATE notification_log SET processedAt = datetime('now'), status = 'processed'
+     WHERE id = (SELECT id FROM notification_log WHERE source = ? AND topic = ? ORDER BY id DESC LIMIT 1)`
+  ).run(source, topic);
+}
+
+/** Mark a notification_log entry as errored with detail. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function markError(db: any, topic: string, errorMsg: string, source = 'shopify') {
+  db.prepare(
+    `UPDATE notification_log SET processedAt = datetime('now'), status = 'error', error = ?
+     WHERE id = (SELECT id FROM notification_log WHERE source = ? AND topic = ? ORDER BY id DESC LIMIT 1)`
+  ).run(errorMsg.substring(0, 2000), source, topic);
+}
+
+/** Resolve a Shopify inventory_item_id to its SKU via REST API. */
+async function resolveInventoryItemSku(
+  shopifyToken: string,
+  inventoryItemId: string | number,
+): Promise<string | null> {
+  const creds = await loadShopifyCredentials();
+  const url = `https://${creds.storeDomain}/admin/api/2024-01/inventory_items/${inventoryItemId}.json`;
+  const response = await fetch(url, {
+    headers: { 'X-Shopify-Access-Token': shopifyToken },
+  });
+  if (!response.ok) {
+    warn(`[Webhook] Failed to resolve inventory item ${inventoryItemId}: ${response.status}`);
+    return null;
+  }
+  const data = (await response.json()) as { inventory_item?: { sku?: string } };
+  return data.inventory_item?.sku || null;
+}
+
+// ---------------------------------------------------------------------------
+// Route
+// ---------------------------------------------------------------------------
 
 router.post('/webhooks/shopify/:topic', async (req: Request, res: Response) => {
   const rawTopic = req.params.topic || req.get('X-Shopify-Topic') || 'unknown';
@@ -58,23 +116,31 @@ router.post('/webhooks/shopify/:topic', async (req: Request, res: Response) => {
     await handleShopifyWebhook(topic, req.body);
   } catch (err) {
     logError(`[Shopify Webhook] Handler error for ${topic}: ${err}`);
+    try {
+      const db = await getRawDb();
+      markError(db, topic, err instanceof Error ? err.message : String(err));
+    } catch { /* best-effort */ }
   }
 });
+
+// ---------------------------------------------------------------------------
+// Router → handler dispatch
+// ---------------------------------------------------------------------------
 
 async function handleShopifyWebhook(topic: string, body: any): Promise<void> {
   try {
     switch (topic) {
       case 'products/update':
       case 'products-update':
-        await handleProductUpdate(body);
+        await handleProductUpdate(body, topic);
         break;
       case 'products/create':
       case 'products-create':
-        await handleProductCreate(body);
+        await handleProductCreate(body, topic);
         break;
       case 'products/delete':
       case 'products-delete':
-        await handleProductDelete(body);
+        await handleProductDelete(body, topic);
         break;
       case 'orders/fulfilled':
       case 'orders-fulfilled':
@@ -82,109 +148,286 @@ async function handleShopifyWebhook(topic: string, body: any): Promise<void> {
         break;
       case 'inventory_levels/update':
       case 'inventory_levels-update':
-        await handleInventoryUpdate(body);
+        await handleInventoryUpdate(body, topic);
         break;
       default:
         warn(`[Shopify Webhook] Unhandled: ${topic}`);
     }
   } catch (err) {
     logError(`[Shopify Webhook] Handler error for ${topic}: ${err}`);
+    throw err; // re-throw so the outer catch can mark the log entry
   }
 }
 
-async function handleProductUpdate(body: any): Promise<void> {
-  info(`[Shopify Webhook] Product updated: ${body?.title} (${body?.id})`);
-  
-  // TODO: Update eBay listing price/details if price sync is enabled
+// ---------------------------------------------------------------------------
+// 1. products/update — update eBay listing details & price
+// ---------------------------------------------------------------------------
+
+async function handleProductUpdate(body: any, topic: string): Promise<void> {
+  const productId = String(body?.id);
+  info(`[Shopify Webhook] Product updated: ${body?.title} (${productId})`);
+
   const db = await getRawDb();
-  const settings = db.prepare(`SELECT value FROM settings WHERE key = 'sync_price'`).get() as any;
-  
-  if (settings?.value === 'true') {
-    info(`[Webhook] Price sync enabled - would update eBay price for product ${body?.id}`);
-    // Implementation would go here
+
+  // Check if this product is mapped to eBay
+  const mapping = db.prepare(
+    `SELECT * FROM product_mappings WHERE shopify_product_id = ? AND status = 'active'`
+  ).get(productId) as any;
+
+  if (!mapping) {
+    info(`[Webhook] Product ${productId} not mapped to eBay — skipping update`);
+    markProcessed(db, topic);
+    return;
+  }
+
+  const { ebayToken, shopifyToken } = await getTokens(db);
+  if (!ebayToken || !shopifyToken) {
+    warn(`[Webhook] Missing tokens (ebay=${!!ebayToken}, shopify=${!!shopifyToken})`);
+    markError(db, topic, 'Missing platform tokens');
+    return;
+  }
+
+  try {
+    const { updateProductOnEbay } = await import('../../sync/product-sync.js');
+    const result = await updateProductOnEbay(ebayToken, shopifyToken, productId);
+
+    if (result.success) {
+      info(`[Webhook] eBay listing updated for product ${productId}: ${result.updated.join(', ')}`);
+      markProcessed(db, topic);
+    } else {
+      warn(`[Webhook] eBay update failed for product ${productId}: ${result.error}`);
+      markError(db, topic, result.error || 'Unknown update error');
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(`[Webhook] products/update error for ${productId}: ${msg}`);
+    markError(db, topic, msg);
   }
 }
 
-async function handleProductCreate(body: any): Promise<void> {
-  info(`[Shopify Webhook] New product: ${body?.title} (${body?.id})`);
-  
-  // TODO: Auto-list to eBay if auto_list is enabled
+// ---------------------------------------------------------------------------
+// 2. products/delete — withdraw eBay offer, mark mapping ended
+// ---------------------------------------------------------------------------
+
+async function handleProductDelete(body: any, topic: string): Promise<void> {
+  const productId = String(body?.id);
+  info(`[Shopify Webhook] Product deleted: ${productId}`);
+
+  const db = await getRawDb();
+
+  const mapping = db.prepare(
+    `SELECT * FROM product_mappings WHERE shopify_product_id = ?`
+  ).get(productId) as any;
+
+  if (!mapping) {
+    info(`[Webhook] Product ${productId} not mapped to eBay — nothing to end`);
+    markProcessed(db, topic);
+    return;
+  }
+
+  if (mapping.status === 'ended') {
+    info(`[Webhook] Mapping for ${productId} already ended`);
+    markProcessed(db, topic);
+    return;
+  }
+
+  const { ebayToken } = await getTokens(db);
+  if (!ebayToken) {
+    warn(`[Webhook] No eBay token — cannot withdraw offer`);
+    markError(db, topic, 'Missing eBay token');
+    return;
+  }
+
+  try {
+    const { endEbayListing } = await import('../../sync/product-sync.js');
+    const result = await endEbayListing(ebayToken, productId);
+
+    if (result.success) {
+      info(`[Webhook] eBay listing ended for deleted product ${productId}`);
+      markProcessed(db, topic);
+    } else {
+      warn(`[Webhook] Failed to end eBay listing for ${productId}: ${result.error}`);
+      markError(db, topic, result.error || 'Unknown end-listing error');
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(`[Webhook] products/delete error for ${productId}: ${msg}`);
+    markError(db, topic, msg);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 3. inventory_levels/update — resolve SKU, sync qty/delist/relist
+// ---------------------------------------------------------------------------
+
+async function handleInventoryUpdate(body: any, topic: string): Promise<void> {
+  const inventoryItemId = body?.inventory_item_id;
+  const available = body?.available;
+
+  info(`[Shopify Webhook] Inventory updated: item ${inventoryItemId}, available: ${available}`);
+
+  const db = await getRawDb();
+
+  // Resolve inventory_item_id → SKU via Shopify REST API
+  const { ebayToken, shopifyToken } = await getTokens(db);
+  if (!ebayToken || !shopifyToken) {
+    warn(`[Webhook] Missing tokens for inventory sync`);
+    markError(db, topic, 'Missing platform tokens');
+    return;
+  }
+
+  try {
+    const sku = await resolveInventoryItemSku(shopifyToken, inventoryItemId);
+    if (!sku) {
+      info(`[Webhook] Could not resolve SKU for inventory item ${inventoryItemId} — skipping`);
+      markProcessed(db, topic);
+      return;
+    }
+
+    info(`[Webhook] Resolved inventory item ${inventoryItemId} → SKU ${sku}`);
+
+    // Check if this SKU is mapped to eBay
+    const mapping = db.prepare(
+      `SELECT * FROM product_mappings WHERE ebay_inventory_item_id = ?`
+    ).get(sku) as any;
+
+    if (!mapping) {
+      info(`[Webhook] SKU ${sku} not mapped to eBay — skipping`);
+      markProcessed(db, topic);
+      return;
+    }
+
+    const quantity = Math.max(0, available ?? 0);
+
+    // Use the full inventory sync logic which handles 0→withdraw, 0→>0 relist, and normal updates
+    const { updateEbayInventory } = await import('../../sync/inventory-sync.js');
+    const result = await updateEbayInventory(ebayToken, sku, quantity);
+
+    if (result.success) {
+      info(`[Webhook] eBay inventory updated for ${sku}: qty=${quantity}, action=${result.action}`);
+      markProcessed(db, topic);
+    } else {
+      // "unchanged" is not really an error — still mark processed
+      if (result.error?.includes('unchanged')) {
+        info(`[Webhook] eBay inventory for ${sku} unchanged at ${quantity}`);
+        markProcessed(db, topic);
+      } else {
+        warn(`[Webhook] eBay inventory update failed for ${sku}: ${result.error}`);
+        markError(db, topic, result.error || 'Unknown inventory error');
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(`[Webhook] inventory_levels/update error: ${msg}`);
+    markError(db, topic, msg);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 4. products/create — log only (auto-list disabled by default)
+// ---------------------------------------------------------------------------
+
+async function handleProductCreate(body: any, topic: string): Promise<void> {
+  const productId = String(body?.id);
+  info(`[Shopify Webhook] New product: ${body?.title} (${productId})`);
+
   const db = await getRawDb();
   const settings = db.prepare(`SELECT value FROM settings WHERE key = 'auto_list'`).get() as any;
-  
+
   if (settings?.value === 'true') {
-    info(`[Webhook] Auto-list enabled - would create eBay listing for product ${body?.id}`);
-    // Implementation would go here - call product sync
+    info(`[Webhook] Auto-list enabled — creating eBay listing for product ${productId}`);
+
+    const { ebayToken, shopifyToken } = await getTokens(db);
+    if (!ebayToken || !shopifyToken) {
+      warn(`[Webhook] Missing tokens for auto-list`);
+      markError(db, topic, 'Missing platform tokens');
+      return;
+    }
+
+    try {
+      const { syncProducts } = await import('../../sync/product-sync.js');
+      const result = await syncProducts(ebayToken, shopifyToken, [productId]);
+
+      if (result.created > 0) {
+        info(`[Webhook] Auto-listed product ${productId} to eBay`);
+        markProcessed(db, topic);
+      } else if (result.failed > 0) {
+        const errMsg = result.errors[0]?.error || 'Auto-list failed';
+        warn(`[Webhook] Auto-list failed for ${productId}: ${errMsg}`);
+        markError(db, topic, errMsg);
+      } else {
+        info(`[Webhook] Product ${productId} skipped by auto-list (already mapped or ineligible)`);
+        markProcessed(db, topic);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logError(`[Webhook] products/create auto-list error for ${productId}: ${msg}`);
+      markError(db, topic, msg);
+    }
+  } else {
+    info(`[Webhook] Auto-list disabled — product ${productId} logged only`);
+    markProcessed(db, topic);
   }
 }
 
-async function handleProductDelete(body: any): Promise<void> {
-  info(`[Shopify Webhook] Product deleted: ${body?.id}`);
-  
-  // TODO: End eBay listing if it exists
-  const db = await getRawDb();
-  const mapping = db.prepare(`SELECT * FROM product_mappings WHERE shopify_product_id = ?`).get(String(body?.id)) as any;
-  
-  if (mapping) {
-    info(`[Webhook] Product was mapped to eBay listing ${mapping.ebay_listing_id} - would end listing`);
-    // Implementation would go here - end eBay listing
-  }
-}
+// ---------------------------------------------------------------------------
+// 5. orders/fulfilled — unchanged, already implemented
+// ---------------------------------------------------------------------------
 
 async function handleOrderFulfilled(body: any): Promise<void> {
   const shopifyOrderId = String(body?.id);
   const shopifyOrderName = body?.name;
-  
+
   info(`[Shopify Webhook] Order fulfilled: ${shopifyOrderName} (${shopifyOrderId})`);
-  
+
   try {
     // Find the corresponding eBay order
     const db = await getRawDb();
     const mapping = db.prepare(
       `SELECT * FROM order_mappings WHERE shopify_order_id = ?`
     ).get(shopifyOrderId) as any;
-    
+
     if (!mapping) {
       info(`[Webhook] No eBay mapping found for Shopify order ${shopifyOrderName}`);
       return;
     }
-    
+
     const ebayOrderId = mapping.ebay_order_id;
-    
+
     // Get eBay token
     const ebayTokenRow = db.prepare(`SELECT access_token FROM auth_tokens WHERE platform = 'ebay'`).get() as any;
     if (!ebayTokenRow?.access_token) {
       warn(`[Webhook] No eBay token found for fulfillment sync`);
       return;
     }
-    
+
     // Extract tracking info from fulfillments
     const fulfillments = body?.fulfillments || [];
     if (fulfillments.length === 0) {
       warn(`[Webhook] No fulfillments found in order ${shopifyOrderName}`);
       return;
     }
-    
+
     const fulfillment = fulfillments[0];  // Use first fulfillment
     const trackingNumber = fulfillment?.tracking_number;
     const carrier = fulfillment?.tracking_company;
-    
+
     if (!trackingNumber) {
       warn(`[Webhook] No tracking number found for order ${shopifyOrderName}`);
       return;
     }
-    
+
     // Create eBay shipping fulfillment
     info(`[Webhook] Creating eBay fulfillment: ${ebayOrderId} → tracking ${trackingNumber}`);
-    
+
     const { createShippingFulfillment } = await import('../../ebay/fulfillment.js');
     const { mapShippingCarrier } = await import('../../sync/mapper.js');
-    
+
     // Get all line items for the order (eBay requires this)
-    const ebayOrder = await import('../../ebay/fulfillment.js').then(mod => 
+    const ebayOrder = await import('../../ebay/fulfillment.js').then(mod =>
       mod.fetchEbayOrder(ebayTokenRow.access_token, ebayOrderId)
     );
-    
+
     const fulfillmentData = {
       lineItems: ebayOrder.lineItems.map(item => ({
         lineItemId: item.lineItemId,
@@ -194,55 +437,22 @@ async function handleOrderFulfilled(body: any): Promise<void> {
       shippingCarrierCode: mapShippingCarrier(carrier || 'OTHER'),
       trackingNumber,
     };
-    
+
     const fulfillmentResult = await createShippingFulfillment(
       ebayTokenRow.access_token,
       ebayOrderId,
       fulfillmentData
     );
-    
+
     info(`[Webhook] eBay fulfillment created: ${fulfillmentResult.fulfillmentId} for order ${ebayOrderId}`);
-    
+
     // Update local mapping status
     db.prepare(
       `UPDATE order_mappings SET status = 'fulfilled' WHERE ebay_order_id = ?`
     ).run(ebayOrderId);
-    
+
   } catch (err) {
     logError(`[Webhook] Fulfillment sync error for ${shopifyOrderName}: ${err}`);
-  }
-}
-
-async function handleInventoryUpdate(body: any): Promise<void> {
-  const inventoryItemId = body?.inventory_item_id;
-  const available = body?.available;
-  
-  info(`[Shopify Webhook] Inventory updated: item ${inventoryItemId}, available: ${available}`);
-  
-  // TODO: Update eBay inventory if sync_inventory is enabled
-  const db = await getRawDb();
-  const settings = db.prepare(`SELECT value FROM settings WHERE key = 'sync_inventory'`).get() as any;
-  
-  if (settings?.value === 'true') {
-    info(`[Webhook] Inventory sync enabled - would update eBay inventory for item ${inventoryItemId}`);
-    
-    // Get eBay token
-    const ebayTokenRow = db.prepare(`SELECT access_token FROM auth_tokens WHERE platform = 'ebay'`).get() as any;
-    if (!ebayTokenRow?.access_token) {
-      return;
-    }
-    
-    try {
-      const { handleInventoryWebhook } = await import('../../sync/inventory-sync.js');
-      
-      // We need to find the product ID from the inventory item ID
-      // This requires a Shopify API call to get the variant info
-      // For now, just log that we would handle it
-      info(`[Webhook] Would sync inventory via handleInventoryWebhook`);
-      
-    } catch (err) {
-      logError(`[Webhook] Inventory sync error: ${err}`);
-    }
   }
 }
 
