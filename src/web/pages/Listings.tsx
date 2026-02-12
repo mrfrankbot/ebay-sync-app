@@ -142,33 +142,68 @@ const ListingDetail: React.FC = () => {
   const [overridesDirty, setOverridesDirty] = useState(false);
   const [overrideSaved, setOverrideSaved] = useState(false);
 
-  // Initialize override values from API response
-  useEffect(() => {
-    if (overridesResponse?.data) {
-      const vals: Record<string, string> = {};
-      for (const o of overridesResponse.data) {
-        vals[`${o.category}::${o.field_name}`] = o.value ?? '';
-      }
-      setOverrideValues(vals);
-      setOverridesDirty(false);
+  // Resolve a Shopify field path like "variants[0].sku" against the product object
+  const resolveShopifyField = useCallback((fieldPath: string, prod: any): string => {
+    if (!prod || !fieldPath) return '';
+    if (fieldPath.includes('[0].')) {
+      const [base, nested] = fieldPath.split('[0].');
+      return String(prod[base]?.[0]?.[nested] ?? '');
     }
-  }, [overridesResponse]);
+    return String(prod[fieldPath] ?? '');
+  }, []);
 
-  // Get all edit_in_grid mappings grouped by category
-  const editableFields = useMemo(() => {
-    if (!mappings) return {} as Record<string, Array<{ field_name: string; display_order: number }>>;
-    const grouped: Record<string, Array<{ field_name: string; display_order: number }>> = {};
+  // Resolve ALL mappings to their actual values, grouped by category
+  // Each field gets: field_name, mapping_type, resolved value, display_order
+  const resolvedFields = useMemo(() => {
+    if (!mappings) return {} as Record<string, Array<{ field_name: string; mapping_type: string; resolved: string; display_order: number }>>;
+    const grouped: Record<string, Array<{ field_name: string; mapping_type: string; resolved: string; display_order: number }>> = {};
     const categories = ['sales', 'listing', 'shipping', 'payment'] as const;
     const m = mappings as unknown as Record<string, any[]>;
+    const prod = productInfo?.product;
     for (const cat of categories) {
       const fields = (m[cat] ?? [])
-        .filter((m: any) => m.mapping_type === 'edit_in_grid' && m.is_enabled !== false)
-        .map((m: any) => ({ field_name: m.field_name, display_order: m.display_order }))
+        .filter((item: any) => item.is_enabled !== false)
+        .map((item: any) => {
+          let resolved = '';
+          switch (item.mapping_type) {
+            case 'shopify_field':
+              resolved = resolveShopifyField(item.source_value || '', prod);
+              break;
+            case 'constant':
+              resolved = item.target_value || '';
+              break;
+            case 'formula':
+              resolved = item.source_value || '';
+              break;
+            case 'edit_in_grid':
+            default:
+              resolved = '';
+              break;
+          }
+          return { field_name: item.field_name, mapping_type: item.mapping_type, resolved, display_order: item.display_order };
+        })
         .sort((a: any, b: any) => a.display_order - b.display_order);
       if (fields.length > 0) grouped[cat] = fields;
     }
     return grouped;
-  }, [mappings]);
+  }, [mappings, productInfo, resolveShopifyField]);
+
+  // Initialize field values: override > resolved mapping > empty
+  useEffect(() => {
+    const vals: Record<string, string> = {};
+    for (const [cat, fields] of Object.entries(resolvedFields)) {
+      for (const f of fields) {
+        vals[`${cat}::${f.field_name}`] = f.resolved;
+      }
+    }
+    if (overridesResponse?.data) {
+      for (const o of overridesResponse.data) {
+        if (o.value) vals[`${o.category}::${o.field_name}`] = o.value;
+      }
+    }
+    setOverrideValues(vals);
+    setOverridesDirty(false);
+  }, [overridesResponse, resolvedFields]);
 
   const handleOverrideChange = useCallback((category: string, fieldName: string, value: string) => {
     const key = `${category}::${fieldName}`;
@@ -227,21 +262,6 @@ const ListingDetail: React.FC = () => {
       addNotification({ type: 'error', title: 'Failed to end listing', message: error instanceof Error ? error.message : 'Unknown error' });
     },
   });
-
-  const mappingCards = useMemo(() => {
-    if (!mappings) return [] as Array<{ title: string; items: string[] }>;
-    const toItems = (list: any[]) =>
-      list
-        .slice(0, 6)
-        .map((item) => `${item.field_name} → ${item.mapping_type === 'constant' ? item.target_value : item.source_value}`)
-        .filter(Boolean);
-    return [
-      { title: 'Listing mappings', items: toItems(mappings.listing ?? []) },
-      { title: 'Sales mappings', items: toItems(mappings.sales ?? []) },
-      { title: 'Shipping mappings', items: toItems(mappings.shipping ?? []) },
-      { title: 'Payment mappings', items: toItems(mappings.payment ?? []) },
-    ].filter((card) => card.items.length > 0);
-  }, [mappings]);
 
   const syncHistory = useMemo(() => {
     if (!listing) return [] as Array<{ label: string; value: string }>;
@@ -365,72 +385,62 @@ const ListingDetail: React.FC = () => {
 
           <Layout.Section>
             <Card>
-              <BlockStack gap="300">
-                <Text variant="headingMd" as="h2">Field mapping</Text>
-                {mappingCards.length === 0 ? (
-                  <Text tone="subdued" as="p">No mapping data available.</Text>
+              <BlockStack gap="400">
+                <InlineStack align="space-between">
+                  <BlockStack gap="100">
+                    <Text variant="headingMd" as="h2">eBay listing fields</Text>
+                    <Text variant="bodySm" tone="subdued" as="p">
+                      These are the values that will be sent to eBay. Edit any field to override the default mapping.
+                    </Text>
+                  </BlockStack>
+                  <Button
+                    variant="primary"
+                    onClick={handleSaveOverrides}
+                    loading={saveOverrides.isPending}
+                    disabled={!overridesDirty}
+                  >
+                    Save changes
+                  </Button>
+                </InlineStack>
+                {overrideSaved && (
+                  <Banner tone="success" title="Changes saved successfully" onDismiss={() => setOverrideSaved(false)} />
+                )}
+                {Object.keys(resolvedFields).length === 0 ? (
+                  <Text tone="subdued" as="p">No mapping data available. Configure mappings first.</Text>
                 ) : (
-                  <InlineStack gap="400" align="start" wrap>
-                    {mappingCards.map((card) => (
-                      <Card key={card.title} padding="300">
-                        <BlockStack gap="200">
-                          <Text variant="headingSm" as="h3">{card.title}</Text>
-                          <List>
-                            {card.items.map((item) => (
-                              <List.Item key={item}>{item}</List.Item>
-                            ))}
-                          </List>
-                        </BlockStack>
-                      </Card>
-                    ))}
-                  </InlineStack>
+                  Object.entries(resolvedFields).map(([category, fields]) => (
+                    <BlockStack key={category} gap="300">
+                      <InlineStack gap="200" align="start">
+                        <Text variant="headingSm" as="h3">{categoryLabels[category] ?? category}</Text>
+                        <Badge tone="info">{`${fields.length} fields`}</Badge>
+                      </InlineStack>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
+                        {fields.map((field) => {
+                          const key = `${category}::${field.field_name}`;
+                          const currentValue = overrideValues[key] ?? '';
+                          const isFromShopify = field.mapping_type === 'shopify_field' && field.resolved && currentValue === field.resolved;
+                          const isConstant = field.mapping_type === 'constant' && currentValue === field.resolved;
+                          const helpText = isFromShopify ? 'Auto-filled from Shopify' : isConstant ? 'Default value' : field.mapping_type === 'edit_in_grid' ? 'Manual entry' : undefined;
+                          return (
+                            <TextField
+                              key={key}
+                              label={formatFieldLabel(field.field_name)}
+                              value={currentValue}
+                              onChange={(value) => handleOverrideChange(category, field.field_name, value)}
+                              autoComplete="off"
+                              helpText={helpText}
+                              labelAction={isFromShopify ? { content: 'Reset', onAction: () => handleOverrideChange(category, field.field_name, field.resolved) } : undefined}
+                            />
+                          );
+                        })}
+                      </div>
+                      {category !== 'payment' && <Divider />}
+                    </BlockStack>
+                  ))
                 )}
               </BlockStack>
             </Card>
           </Layout.Section>
-
-          {Object.keys(editableFields).length > 0 && (
-            <Layout.Section>
-              <Card>
-                <BlockStack gap="400">
-                  <InlineStack align="space-between">
-                    <Text variant="headingMd" as="h2">Per-product overrides</Text>
-                    <Button
-                      variant="primary"
-                      onClick={handleSaveOverrides}
-                      loading={saveOverrides.isPending}
-                      disabled={!overridesDirty}
-                    >
-                      Save overrides
-                    </Button>
-                  </InlineStack>
-                  {overrideSaved && (
-                    <Banner tone="success" title="Overrides saved successfully" onDismiss={() => setOverrideSaved(false)} />
-                  )}
-                  <Text variant="bodySm" tone="subdued" as="p">
-                    Edit field values for this specific product. These override the default mapping settings.
-                  </Text>
-                  {Object.entries(editableFields).map(([category, fields]) => (
-                    <BlockStack key={category} gap="300">
-                      <Text variant="headingSm" as="h3">{categoryLabels[category] ?? category}</Text>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '12px' }}>
-                        {fields.map((field) => (
-                          <TextField
-                            key={`${category}::${field.field_name}`}
-                            label={formatFieldLabel(field.field_name)}
-                            value={overrideValues[`${category}::${field.field_name}`] ?? ''}
-                            onChange={(value) => handleOverrideChange(category, field.field_name, value)}
-                            autoComplete="off"
-                          />
-                        ))}
-                      </div>
-                      <Divider />
-                    </BlockStack>
-                  ))}
-                </BlockStack>
-              </Card>
-            </Layout.Section>
-          )}
 
           <Layout.Section>
             <Card>
