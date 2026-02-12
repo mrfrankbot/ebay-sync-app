@@ -413,6 +413,33 @@ router.get('/api/test/product-info/:productId', async (req: Request, res: Respon
   }
 });
 
+/** GET /api/test/shopify-locations — Get Shopify locations */
+router.get('/api/test/shopify-locations', async (_req: Request, res: Response) => {
+  try {
+    const db = await getRawDb();
+    const tokenRow = db.prepare(`SELECT access_token FROM auth_tokens WHERE platform = 'shopify'`).get() as any;
+    if (!tokenRow?.access_token) {
+      res.status(400).json({ error: 'No Shopify token' });
+      return;
+    }
+
+    const response = await fetch('https://usedcameragear.myshopify.com/admin/api/2024-01/locations.json', {
+      headers: { 'X-Shopify-Access-Token': tokenRow.access_token },
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      res.status(500).json({ error: 'Failed to fetch locations', detail: errText });
+      return;
+    }
+
+    const data = await response.json() as any;
+    res.json({ ok: true, locations: data.locations?.map((l: any) => ({ id: l.id, name: l.name, active: l.active })) || [] });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed', detail: String(err) });
+  }
+});
+
 /** GET /api/test/ebay-offer/:sku — Get eBay offer details for a SKU */
 router.get('/api/test/ebay-offer/:sku', async (req: Request, res: Response) => {
   try {
