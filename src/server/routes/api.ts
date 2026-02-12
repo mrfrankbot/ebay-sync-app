@@ -546,6 +546,50 @@ router.post('/api/sync/products/:productId/end', async (req: Request, res: Respo
   }
 });
 
+/** POST /api/test/update-product — Update test product title/status in Shopify */
+router.post('/api/test/update-product', async (req: Request, res: Response) => {
+  try {
+    const db = await getRawDb();
+    const tokenRow = db.prepare(`SELECT access_token FROM auth_tokens WHERE platform = 'shopify'`).get() as any;
+    if (!tokenRow?.access_token) {
+      res.status(400).json({ error: 'No Shopify token' });
+      return;
+    }
+
+    const productId = req.body.productId as string;
+    const updates: any = {};
+    if (req.body.title) updates.title = req.body.title;
+    if (req.body.status) updates.status = req.body.status;
+    if (req.body.body_html) updates.body_html = req.body.body_html;
+
+    if (!productId || Object.keys(updates).length === 0) {
+      res.status(400).json({ error: 'productId and at least one field (title, status, body_html) required' });
+      return;
+    }
+
+    const response = await fetch(`https://usedcameragear.myshopify.com/admin/api/2024-01/products/${productId}.json`, {
+      method: 'PUT',
+      headers: {
+        'X-Shopify-Access-Token': tokenRow.access_token,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ product: { id: productId, ...updates } }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      res.status(500).json({ error: 'Failed to update product', detail: errText });
+      return;
+    }
+
+    const data = await response.json() as any;
+    info(`[API] Test product updated: ${productId} — ${JSON.stringify(updates)}`);
+    res.json({ ok: true, product: { id: data.product.id, title: data.product.title, status: data.product.status } });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed', detail: String(err) });
+  }
+});
+
 /** POST /api/listings/link — Manually link eBay listing to Shopify product */
 router.post('/api/listings/link', async (req: Request, res: Response) => {
   try {
