@@ -117,6 +117,7 @@ export const ebayRequest = async <T>({
     headers: {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
+      'Accept-Language': 'en-US',
       ...headers,
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -127,5 +128,12 @@ export const ebayRequest = async <T>({
     throw new Error(`eBay API request failed (${response.status}): ${text}`);
   }
 
-  return (await response.json()) as T;
+  // eBay returns 204 No Content for successful PUT/DELETE operations
+  if (response.status === 204 || response.headers.get('content-length') === '0') {
+    return undefined as unknown as T;
+  }
+
+  const text = await response.text();
+  if (!text) return undefined as unknown as T;
+  return JSON.parse(text) as T;
 };

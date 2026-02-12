@@ -23,3 +23,28 @@ embedded = false
 [build]
 automatically_update_urls_on_dev = true
 dev_store_url = ""
+
+# Navigation links for Shopify admin sidebar
+[[app.navigation.links]]
+label = "Dashboard"
+destination = "/"
+
+[[app.navigation.links]]
+label = "Listings"
+destination = "/listings"
+
+[[app.navigation.links]]
+label = "Mappings"
+destination = "/mappings"
+
+[[app.navigation.links]]
+label = "Orders"
+destination = "/orders"
+
+[[app.navigation.links]]
+label = "Settings"
+destination = "/settings"
+
+[[app.navigation.links]]
+label = "Logs"
+destination = "/logs"

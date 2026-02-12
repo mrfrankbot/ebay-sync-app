@@ -7,6 +7,7 @@ import Listings from './pages/Listings';
 import Orders from './pages/Orders';
 import Settings from './pages/Settings';
 import Logs from './pages/Logs';
+import Mappings from './pages/Mappings';
 
 const AppFrame: React.FC = () => {
   const location = useLocation();
@@ -32,6 +33,11 @@ const AppFrame: React.FC = () => {
             onClick: () => navigate('/orders'),
           },
           {
+            label: 'Mappings',
+            url: '/mappings',
+            onClick: () => navigate('/mappings'),
+          },
+          {
             label: 'Settings',
             url: '/settings',
             onClick: () => navigate('/settings'),
@@ -52,6 +58,7 @@ const AppFrame: React.FC = () => {
         <Route path="/" element={<Dashboard />} />
         <Route path="/listings" element={<Listings />} />
         <Route path="/orders" element={<Orders />} />
+        <Route path="/mappings" element={<Mappings />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/logs" element={<Logs />} />
       </Routes>
