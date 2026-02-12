@@ -136,7 +136,7 @@ export const updateMapping = async (
   }
   if (updates.is_enabled !== undefined) {
     updateFields.push('is_enabled = ?');
-    values.push(updates.is_enabled);
+    values.push(updates.is_enabled ? 1 : 0);
   }
 
   if (updateFields.length === 0) {
