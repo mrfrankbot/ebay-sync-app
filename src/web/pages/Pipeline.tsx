@@ -28,73 +28,32 @@ import {
 /* Types                                                               */
 /* ------------------------------------------------------------------ */
 
+interface PipelineStep {
+  name: string;
+  status: string;
+  startedAt?: string;
+  completedAt?: string;
+  result?: string;
+}
+
 interface PipelineJob {
   id: string;
-  product: string;
-  status: 'queued' | 'processing' | 'completed' | 'failed';
-  currentStep: string;
-  started: string;
-  completed: string | null;
+  shopifyProductId: string;
+  shopifyTitle?: string | null;
+  status: 'queued' | 'processing' | 'completed' | 'failed' | string;
+  currentStep?: string | null;
+  steps?: PipelineStep[];
+  startedAt?: number | string | null;
+  completedAt?: number | string | null;
+  createdAt?: number | string | null;
+  updatedAt?: number | string | null;
+  error?: string | null;
 }
 
 interface PipelineJobsResponse {
-  data: PipelineJob[];
+  jobs: PipelineJob[];
+  count: number;
 }
-
-/* ------------------------------------------------------------------ */
-/* Sample data (used when the API isn't available yet)                  */
-/* ------------------------------------------------------------------ */
-
-const SAMPLE_JOBS: PipelineJob[] = [
-  {
-    id: '1',
-    product: 'Canon EOS R5 Body',
-    status: 'completed',
-    currentStep: 'eBay Listing',
-    started: new Date(Date.now() - 3600000).toISOString(),
-    completed: new Date(Date.now() - 3000000).toISOString(),
-  },
-  {
-    id: '2',
-    product: 'Sony A7 IV Kit w/ 28-70mm',
-    status: 'processing',
-    currentStep: 'Image Processing',
-    started: new Date(Date.now() - 1200000).toISOString(),
-    completed: null,
-  },
-  {
-    id: '3',
-    product: 'Nikon Z6 III Body',
-    status: 'processing',
-    currentStep: 'AI Description',
-    started: new Date(Date.now() - 600000).toISOString(),
-    completed: null,
-  },
-  {
-    id: '4',
-    product: 'Fujifilm X-T5 Body (Silver)',
-    status: 'queued',
-    currentStep: 'Shopify Import',
-    started: new Date(Date.now() - 120000).toISOString(),
-    completed: null,
-  },
-  {
-    id: '5',
-    product: 'Leica Q3 43mm',
-    status: 'failed',
-    currentStep: 'Image Processing',
-    started: new Date(Date.now() - 7200000).toISOString(),
-    completed: new Date(Date.now() - 6800000).toISOString(),
-  },
-  {
-    id: '6',
-    product: 'DJI Mavic 3 Pro Combo',
-    status: 'completed',
-    currentStep: 'eBay Listing',
-    started: new Date(Date.now() - 14400000).toISOString(),
-    completed: new Date(Date.now() - 13800000).toISOString(),
-  },
-];
 
 /* ------------------------------------------------------------------ */
 /* Pipeline stage definitions                                          */
@@ -109,11 +68,27 @@ interface PipelineStage {
   activeCount: number;
 }
 
+const STEP_LABELS: Record<string, string> = {
+  fetch_product: 'Shopify Import',
+  generate_description: 'AI Description',
+  process_images: 'Image Processing',
+  create_ebay_listing: 'eBay Listing',
+};
+
+function resolveStepLabel(job: PipelineJob): string {
+  if (job.currentStep) return job.currentStep;
+  const running = job.steps?.find((step) => step.status === 'running');
+  if (running?.name && STEP_LABELS[running.name]) return STEP_LABELS[running.name];
+  const pending = job.steps?.find((step) => step.status === 'pending');
+  if (pending?.name && STEP_LABELS[pending.name]) return STEP_LABELS[pending.name];
+  return 'Shopify Import';
+}
+
 function buildStages(jobs: PipelineJob[]): PipelineStage[] {
   const countAtStep = (step: string, status?: string) =>
     jobs.filter(
       (j) =>
-        j.currentStep === step &&
+        resolveStepLabel(j) === step &&
         (status ? j.status === status : j.status === 'processing' || j.status === 'queued'),
     ).length;
 
@@ -224,14 +199,33 @@ function statusIcon(status: string) {
   }
 }
 
-function timeAgo(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ${mins % 60}m ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
+function toMilliseconds(value?: number | string | null): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') {
+    return value > 1_000_000_000_000 ? value : value * 1000;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function formatTimestamp(value?: number | string | null): string {
+  const ms = toMilliseconds(value);
+  if (!ms) return '—';
+  return new Date(ms).toLocaleString();
+}
+
+function formatDuration(start?: number | string | null, end?: number | string | null): string {
+  const startMs = toMilliseconds(start);
+  if (!startMs) return '—';
+  const endMs = toMilliseconds(end) ?? Date.now();
+  const diffMs = Math.max(0, endMs - startMs);
+  const totalMinutes = Math.floor(diffMs / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (totalMinutes > 0) return `${totalMinutes}m`;
+  const seconds = Math.max(1, Math.floor(diffMs / 1000));
+  return `${seconds}s`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -279,8 +273,40 @@ const Pipeline: React.FC = () => {
     retry: 1,
   });
 
-  const jobs: PipelineJob[] = data?.data ?? [];
+  const jobs: PipelineJob[] = data?.jobs ?? [];
   const isEmpty = jobs.length === 0;
+
+  const missingTitleIds = React.useMemo(() => {
+    const ids = jobs
+      .filter((job) => !job.shopifyTitle && job.shopifyProductId)
+      .map((job) => job.shopifyProductId);
+    return Array.from(new Set(ids));
+  }, [jobs]);
+
+  const { data: titleLookup } = useQuery({
+    queryKey: ['pipeline-job-titles', missingTitleIds],
+    queryFn: async () => {
+      if (missingTitleIds.length === 0) return {} as Record<string, string>;
+      const entries = await Promise.all(
+        missingTitleIds.map(async (id) => {
+          try {
+            const res = await apiClient.get<{ ok: boolean; product?: { title?: string } }>(
+              `/test/product-info/${encodeURIComponent(id)}`,
+            );
+            return [id, res.product?.title ?? ''] as const;
+          } catch {
+            return [id, ''] as const;
+          }
+        }),
+      );
+      return entries.reduce((acc, [id, title]) => {
+        if (title) acc[id] = title;
+        return acc;
+      }, {} as Record<string, string>);
+    },
+    enabled: missingTitleIds.length > 0,
+    staleTime: 5 * 60 * 1000,
+  });
 
   const stages = buildStages(jobs);
   const hasActiveFlow = stages.some((s) => s.activeCount > 0);
@@ -405,7 +431,7 @@ const Pipeline: React.FC = () => {
                     { title: 'Status' },
                     { title: 'Current Step' },
                     { title: 'Started' },
-                    { title: 'Completed' },
+                    { title: 'Duration' },
                   ]}
                   selectable={false}
                 >
@@ -413,7 +439,9 @@ const Pipeline: React.FC = () => {
                     <IndexTable.Row key={job.id} id={job.id} position={idx}>
                       <IndexTable.Cell>
                         <Text as="span" variant="bodyMd" fontWeight="semibold">
-                          {job.product}
+                          {job.shopifyTitle ??
+                            titleLookup?.[job.shopifyProductId] ??
+                            `Shopify product ${job.shopifyProductId}`}
                         </Text>
                       </IndexTable.Cell>
                       <IndexTable.Cell>
@@ -423,16 +451,16 @@ const Pipeline: React.FC = () => {
                         </InlineStack>
                       </IndexTable.Cell>
                       <IndexTable.Cell>
-                        <Text as="span">{job.currentStep}</Text>
+                        <Text as="span">{resolveStepLabel(job)}</Text>
                       </IndexTable.Cell>
                       <IndexTable.Cell>
                         <Text as="span" tone="subdued">
-                          {timeAgo(job.started)}
+                          {formatTimestamp(job.startedAt ?? job.createdAt ?? null)}
                         </Text>
                       </IndexTable.Cell>
                       <IndexTable.Cell>
                         <Text as="span" tone="subdued">
-                          {job.completed ? timeAgo(job.completed) : '—'}
+                          {formatDuration(job.startedAt ?? job.createdAt ?? null, job.completedAt ?? null)}
                         </Text>
                       </IndexTable.Cell>
                     </IndexTable.Row>

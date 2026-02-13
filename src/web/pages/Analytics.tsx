@@ -134,20 +134,24 @@ const Analytics: React.FC = () => {
             <BlockStack gap="300">
               <Text variant="headingMd" as="h2">Latest sync history</Text>
               <BlockStack gap="200">
-                {(logsData?.data ?? []).slice(0, 8).map((log) => (
-                  <InlineStack key={String(log.id ?? Math.random())} align="space-between">
-                    <BlockStack gap="100">
-                      <Text as="p">{log.topic ?? log.message ?? 'Sync event'}</Text>
-                      <Text tone="subdued" as="p">{log.source ?? 'System'}</Text>
-                    </BlockStack>
-                    <InlineStack gap="200" align="center">
-                      <Badge tone={log.status === 'error' ? 'critical' : log.status === 'warning' ? 'warning' : 'info'}>
-                        {log.status ?? 'info'}
-                      </Badge>
-                      <Text tone="subdued" as="p">{formatTimestamp(log.createdAt ?? log.created_at)}</Text>
+                {(logsData?.data ?? []).length === 0 ? (
+                  <Text tone="subdued" as="p">No sync activity yet.</Text>
+                ) : (
+                  (logsData?.data ?? []).slice(0, 8).map((log) => (
+                    <InlineStack key={String(log.id ?? Math.random())} align="space-between">
+                      <BlockStack gap="100">
+                        <Text as="p">{log.topic ?? log.message ?? 'Sync event'}</Text>
+                        <Text tone="subdued" as="p">{log.source ?? 'System'}</Text>
+                      </BlockStack>
+                      <InlineStack gap="200" align="center">
+                        <Badge tone={log.status === 'error' ? 'critical' : log.status === 'warning' ? 'warning' : 'info'}>
+                          {log.status ?? 'info'}
+                        </Badge>
+                        <Text tone="subdued" as="p">{formatTimestamp(log.createdAt ?? log.created_at)}</Text>
+                      </InlineStack>
                     </InlineStack>
-                  </InlineStack>
-                ))}
+                  ))
+                )}
               </BlockStack>
             </BlockStack>
           </Card>

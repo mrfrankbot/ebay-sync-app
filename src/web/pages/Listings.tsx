@@ -537,7 +537,8 @@ const Listings: React.FC = () => {
     const active = listings.filter((listing) => getStatusPresentation(listing).label === 'Active').length;
     const missing = listings.filter((listing) => !listing.ebayListingId).length;
     const errorCount = listings.filter((listing) => getStatusPresentation(listing).label === 'Error').length;
-    return { active, missing, errorCount };
+    const draft = listings.filter((listing) => getStatusPresentation(listing).label === 'Draft').length;
+    return { active, missing, errorCount, draft };
   }, [listings]);
 
   const selectedIdsOnPage = useMemo(() => pageListings.map((listing) => listing.shopifyProductId), [pageListings]);
@@ -686,6 +687,10 @@ const Listings: React.FC = () => {
                     <Text variant="bodySm" tone="subdued" as="p">Missing</Text>
                   </BlockStack>
                   <BlockStack gap="100" inlineAlign="center">
+                    <Text variant="headingMd" as="p">{stats.draft}</Text>
+                    <Text variant="bodySm" tone="subdued" as="p">Draft</Text>
+                  </BlockStack>
+                  <BlockStack gap="100" inlineAlign="center">
                     <Text variant="headingMd" as="p">{stats.errorCount}</Text>
                     <Text variant="bodySm" tone="subdued" as="p">Errors</Text>
                   </BlockStack>
@@ -774,7 +779,7 @@ const Listings: React.FC = () => {
                     { title: 'Status' },
                     { title: 'Price' },
                     { title: 'Last updated' },
-                    { title: 'Quick actions' },
+                    { title: 'Actions' },
                   ]}
                 >
                   {rowMarkup}

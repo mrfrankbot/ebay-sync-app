@@ -24,6 +24,8 @@ import { apiClient } from '../hooks/useApi';
 interface HelpQuestion {
   id: number;
   question: string;
+  question_text?: string;
+  title?: string;
   answer: string | null;
   status: string;
   asked_by: string | null;
@@ -187,6 +189,8 @@ const HelpAdmin: React.FC = () => {
                   <BlockStack gap="300">
                     {questions.map((q) => {
                       const isExpanded = expandedId === q.id;
+                      const questionText =
+                        q.question || q.question_text || q.title || 'Untitled question';
                       return (
                         <Card key={q.id}>
                           <BlockStack gap="200">
@@ -206,7 +210,7 @@ const HelpAdmin: React.FC = () => {
                                     {isExpanded ? '▾' : '▸'} #{q.id}
                                   </Text>
                                   <Text as="span" variant="bodyMd">
-                                    {q.question.length > 80 ? q.question.slice(0, 80) + '…' : q.question}
+                                    {questionText.length > 80 ? questionText.slice(0, 80) + '…' : questionText}
                                   </Text>
                                 </InlineStack>
                                 <InlineStack gap="200" blockAlign="center">
@@ -259,7 +263,7 @@ const HelpAdmin: React.FC = () => {
                                   <Text variant="headingSm" as="h3">
                                     Full question
                                   </Text>
-                                  <Text as="p">{q.question}</Text>
+                                  <Text as="p">{questionText}</Text>
 
                                   <TextField
                                     label="Answer"
