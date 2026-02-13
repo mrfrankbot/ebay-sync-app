@@ -733,10 +733,10 @@ export const getDb = async () => {
     const filePath = await ensureDbPath();
     rawSqlite = new Database(filePath);
     initTables(rawSqlite);
+    initExtraTables(rawSqlite);
     migrateProductMappings(rawSqlite);
     migrateHelpQuestions(rawSqlite);
     migrateHelpCategoryCase(rawSqlite);
-    initExtraTables(rawSqlite);
     await seedDefaultMappings(rawSqlite);
     seedHelpContent(rawSqlite);
     seedGettingStartedContent(rawSqlite);
