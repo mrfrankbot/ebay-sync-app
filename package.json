@@ -1,5 +1,5 @@
 {
-  "name": "ebay-sync",
+  "name": "product-bridge",
   "version": "0.2.0",
   "description": "Shopify ↔ eBay sync tool for UsedCameraGear.com",
   "type": "module",
