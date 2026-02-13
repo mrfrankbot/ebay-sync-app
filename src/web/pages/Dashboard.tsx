@@ -1,12 +1,14 @@
 import React, { useMemo } from 'react';
 import {
+  Badge,
   Banner,
   BlockStack,
   Box,
   Button,
-  Badge,
   Card,
   Divider,
+  Icon,
+  InlineGrid,
   InlineStack,
   Layout,
   Page,
@@ -14,29 +16,37 @@ import {
   Text,
 } from '@shopify/polaris';
 import {
-  ChartLineIcon,
-  CheckCircleIcon,
-  CashDollarIcon,
   ProductIcon,
   OrderIcon,
+  SettingsIcon,
+  ViewIcon,
+  ImageIcon,
+  ClipboardChecklistIcon,
+  StatusActiveIcon,
+  AlertCircleIcon,
 } from '@shopify/polaris-icons';
 import { useNavigate } from 'react-router-dom';
 import { useLogs, useStatus } from '../hooks/useApi';
-import MetricCard from '../components/MetricCard';
 import { useAppStore } from '../store';
+
+/* ────────────────── Helpers ────────────────── */
 
 const formatTimestamp = (value?: string | number | null) => {
   if (!value) return '—';
-  let date: Date;
-  if (typeof value === 'number') {
-    // If the timestamp looks like Unix seconds (< 1e12), convert to ms
-    const ms = value > 1_000_000_000_000 ? value : value * 1000;
-    date = new Date(ms);
-  } else {
-    date = new Date(value);
-  }
-  if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleString();
+  const ms =
+    typeof value === 'number'
+      ? value > 1_000_000_000_000
+        ? value
+        : value * 1000
+      : Date.parse(value);
+  if (Number.isNaN(ms)) return '—';
+  const d = new Date(ms);
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  if (diffMs < 60_000) return 'Just now';
+  if (diffMs < 3_600_000) return `${Math.floor(diffMs / 60_000)}m ago`;
+  if (diffMs < 86_400_000) return `${Math.floor(diffMs / 3_600_000)}h ago`;
+  return d.toLocaleDateString();
 };
 
 const formatUptime = (seconds?: number | null) => {
@@ -48,15 +58,86 @@ const formatUptime = (seconds?: number | null) => {
   return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
 };
 
+/* ────────────────── Stat Card ────────────────── */
+
+interface StatCardProps {
+  label: string;
+  value: string | number;
+  icon: any;
+  tone?: 'success' | 'critical' | 'warning' | 'info';
+}
+
+const StatCard: React.FC<StatCardProps> = ({ label, value, icon, tone }) => (
+  <Card>
+    <BlockStack gap="200">
+      <InlineStack align="space-between" blockAlign="center">
+        <Box
+          background={
+            tone === 'success'
+              ? 'bg-fill-success-secondary'
+              : tone === 'critical'
+                ? 'bg-fill-critical-secondary'
+                : 'bg-fill-secondary'
+          }
+          borderRadius="200"
+          padding="200"
+        >
+          <Icon source={icon} tone={tone ?? 'base'} />
+        </Box>
+      </InlineStack>
+      <Text variant="headingXl" as="p">{typeof value === 'number' ? value.toLocaleString() : value}</Text>
+      <Text variant="bodySm" tone="subdued" as="p">{label}</Text>
+    </BlockStack>
+  </Card>
+);
+
+/* ────────────────── Quick Action Card ────────────────── */
+
+interface ActionCardProps {
+  title: string;
+  description: string;
+  icon: any;
+  onClick: () => void;
+  badge?: string;
+  badgeTone?: 'success' | 'info' | 'warning' | 'critical';
+}
+
+const ActionCard: React.FC<ActionCardProps> = ({ title, description, icon, onClick, badge, badgeTone }) => (
+  <div
+    onClick={onClick}
+    style={{ cursor: 'pointer' }}
+    role="button"
+    tabIndex={0}
+    onKeyDown={(e) => e.key === 'Enter' && onClick()}
+  >
+    <Card>
+      <BlockStack gap="200">
+        <InlineStack gap="200" blockAlign="center" align="space-between">
+          <InlineStack gap="200" blockAlign="center">
+            <Box background="bg-fill-secondary" borderRadius="200" padding="200">
+              <Icon source={icon} />
+            </Box>
+            <Text variant="headingSm" as="h3">{title}</Text>
+          </InlineStack>
+          {badge && <Badge tone={badgeTone}>{badge}</Badge>}
+        </InlineStack>
+        <Text variant="bodySm" tone="subdued" as="p">{description}</Text>
+      </BlockStack>
+    </Card>
+  </div>
+);
+
+/* ────────────────── Dashboard ────────────────── */
+
 const Dashboard: React.FC = () => {
   const { data: statusData, isLoading, error } = useStatus();
   const { data: logsData } = useLogs(10);
   const navigate = useNavigate();
-  const { notifications, connections } = useAppStore();
+  const { connections } = useAppStore();
 
   const activityRows = useMemo(() => {
     if (!logsData?.data) return [];
-    return logsData.data.slice(0, 5).map((log) => ({
+    return logsData.data.slice(0, 6).map((log) => ({
       id: String(log.id ?? Math.random()),
       topic: log.topic ?? log.message ?? 'Sync event',
       source: log.source ?? 'System',
@@ -67,162 +148,169 @@ const Dashboard: React.FC = () => {
 
   if (error) {
     return (
-      <Page title="Dashboard">
-        <Banner tone="critical" title="Failed to load dashboard">
+      <Page title="Product Bridge">
+        <Banner tone="critical" title="Unable to connect">
           <Text as="p">{(error as Error).message}</Text>
         </Banner>
       </Page>
     );
   }
 
+  const productsMapped = statusData?.products?.mapped ?? 0;
+  const ordersImported = statusData?.orders?.imported ?? 0;
+
   return (
-    <Page title="Dashboard" subtitle="Monitor sync status and storefront connections">
-      <BlockStack gap="400">
-        {notifications.slice(0, 2).map((notice) => (
-          <Banner
-            key={notice.id}
-            tone={notice.type === 'error' ? 'critical' : notice.type === 'warning' ? 'warning' : 'success'}
-            title={notice.title}
-          >
-            {notice.message && <Text as="p">{notice.message}</Text>}
-          </Banner>
-        ))}
+    <Page title="Product Bridge" fullWidth>
+      <BlockStack gap="500">
 
-        <Layout>
-          <Layout.Section>
-            <Card>
-              <BlockStack gap="400">
-                <InlineStack align="space-between">
-                  <BlockStack gap="100">
-                    <Text variant="headingMd" as="h2">
-                      Sync status
-                    </Text>
-                    <Text tone="subdued" as="p">
-                      {statusData?.status === 'running' ? 'System is healthy' : 'Waiting for sync'}
-                    </Text>
-                  </BlockStack>
-                  {isLoading ? <Spinner size="small" /> : null}
-                </InlineStack>
-                <InlineStack gap="400" align="space-between" wrap>
-                  <MetricCard
-                    title="Products mapped"
-                    value={statusData?.products?.mapped ?? 0}
-                    icon={<ProductIcon />}
-                    loading={isLoading}
-                  />
-                  <MetricCard
-                    title="Orders imported"
-                    value={statusData?.orders?.imported ?? 0}
-                    icon={<OrderIcon />}
-                    loading={isLoading}
-                  />
-                  <MetricCard
-                    title="Inventory synced"
-                    value={statusData?.inventory?.synced ?? 0}
-                    icon={<CheckCircleIcon />}
-                    loading={isLoading}
-                  />
-                  <MetricCard
-                    title="Revenue"
-                    value={`$${(statusData?.revenue?.total ?? statusData?.revenue?.today ?? 0).toLocaleString()}`}
-                    icon={<CashDollarIcon />}
-                    loading={isLoading}
-                  />
-                </InlineStack>
-                <Divider />
-                <InlineStack gap="400" wrap>
-                  <Box>
-                    <Text variant="bodySm" tone="subdued" as="p">
-                      Last sync
-                    </Text>
-                    <Text variant="headingSm" as="p">
-                      {statusData?.lastSyncs?.[0]
-                        ? formatTimestamp((statusData.lastSyncs[0] as any).created_at ?? (statusData.lastSyncs[0] as any).createdAt)
-                        : '—'}
-                    </Text>
-                  </Box>
-                  <Box>
-                    <Text variant="bodySm" tone="subdued" as="p">
-                      Uptime
-                    </Text>
-                    <Text variant="headingSm" as="p">
-                      {formatUptime(statusData?.uptime)}
-                    </Text>
-                  </Box>
-                </InlineStack>
-              </BlockStack>
-            </Card>
-          </Layout.Section>
-
-          <Layout.Section variant="oneHalf">
-            <Card>
-              <BlockStack gap="300">
-                <Text variant="headingMd" as="h3">
-                  Connections
+        {/* ── Status Bar ── */}
+        <Card>
+          <InlineStack align="space-between" blockAlign="center">
+            <InlineStack gap="300" blockAlign="center">
+              <Box
+                background={statusData?.status === 'running' ? 'bg-fill-success-secondary' : 'bg-fill-warning-secondary'}
+                borderRadius="full"
+                padding="100"
+              >
+                <Icon
+                  source={statusData?.status === 'running' ? StatusActiveIcon : AlertCircleIcon}
+                  tone={statusData?.status === 'running' ? 'success' : 'warning'}
+                />
+              </Box>
+              <BlockStack gap="050">
+                <Text variant="headingSm" as="h2">
+                  {statusData?.status === 'running' ? 'All systems operational' : 'Connecting…'}
                 </Text>
-                <InlineStack align="space-between">
-                  <Text as="span">Shopify</Text>
-                  <Badge tone={connections.shopify ? 'success' : 'critical'}>
-                    {connections.shopify ? 'Connected' : 'Disconnected'}
-                  </Badge>
-                </InlineStack>
-                <InlineStack align="space-between">
-                  <Text as="span">eBay</Text>
-                  <Badge tone={connections.ebay ? 'success' : 'critical'}>
-                    {connections.ebay ? 'Connected' : 'Disconnected'}
-                  </Badge>
-                </InlineStack>
+                <Text variant="bodySm" tone="subdued" as="p">
+                  Uptime {formatUptime(statusData?.uptime)}
+                </Text>
               </BlockStack>
-            </Card>
-          </Layout.Section>
+            </InlineStack>
+            <InlineStack gap="300">
+              <InlineStack gap="100" blockAlign="center">
+                <Text variant="bodySm" as="span">Shopify</Text>
+                <Badge tone={connections.shopify ? 'success' : 'critical'}>
+                  {connections.shopify ? '✓' : '✗'}
+                </Badge>
+              </InlineStack>
+              <InlineStack gap="100" blockAlign="center">
+                <Text variant="bodySm" as="span">eBay</Text>
+                <Badge tone={connections.ebay ? 'success' : 'critical'}>
+                  {connections.ebay ? '✓' : '✗'}
+                </Badge>
+              </InlineStack>
+            </InlineStack>
+          </InlineStack>
+        </Card>
 
-          <Layout.Section variant="oneHalf">
-            <Card>
+        {/* ── Stats Row ── */}
+        {isLoading ? (
+          <InlineStack align="center"><Spinner size="large" /></InlineStack>
+        ) : (
+          <InlineGrid columns={{ xs: 2, sm: 2, md: 4 }} gap="300">
+            <StatCard
+              label="Products Mapped"
+              value={productsMapped}
+              icon={ProductIcon}
+              tone={productsMapped > 0 ? 'success' : undefined}
+            />
+            <StatCard
+              label="Orders Imported"
+              value={ordersImported}
+              icon={OrderIcon}
+              tone={ordersImported > 0 ? 'success' : undefined}
+            />
+            <StatCard
+              label="Inventory Synced"
+              value={statusData?.inventory?.synced ?? 0}
+              icon={ClipboardChecklistIcon}
+            />
+            <StatCard
+              label="Revenue"
+              value={`$${(statusData?.revenue?.total ?? statusData?.revenue?.today ?? 0).toLocaleString()}`}
+              icon={ViewIcon}
+            />
+          </InlineGrid>
+        )}
+
+        {/* ── Quick Actions ── */}
+        <BlockStack gap="200">
+          <Text variant="headingMd" as="h2">Quick actions</Text>
+          <InlineGrid columns={{ xs: 1, sm: 2, md: 2 }} gap="300">
+            <ActionCard
+              title="Browse Products"
+              description="View your Shopify catalog, run the AI pipeline, and manage listings"
+              icon={ProductIcon}
+              onClick={() => navigate('/listings')}
+              badge={`${productsMapped} mapped`}
+              badgeTone="info"
+            />
+            <ActionCard
+              title="eBay Listings"
+              description="Manage your active and draft eBay listings"
+              icon={ViewIcon}
+              onClick={() => navigate('/ebay/listings')}
+            />
+            <ActionCard
+              title="Pipeline"
+              description="Monitor AI descriptions, image processing, and listing creation"
+              icon={ImageIcon}
+              onClick={() => navigate('/pipeline')}
+            />
+            <ActionCard
+              title="Settings"
+              description="Configure connections, description prompts, and sync preferences"
+              icon={SettingsIcon}
+              onClick={() => navigate('/settings')}
+            />
+          </InlineGrid>
+        </BlockStack>
+
+        {/* ── Recent Activity ── */}
+        <Card>
+          <BlockStack gap="300">
+            <InlineStack align="space-between" blockAlign="center">
+              <Text variant="headingMd" as="h2">Recent activity</Text>
+              <Button variant="plain" onClick={() => navigate('/logs')}>View all</Button>
+            </InlineStack>
+            <Divider />
+            {activityRows.length === 0 ? (
+              <Box padding="400">
+                <BlockStack gap="200" inlineAlign="center">
+                  <Text tone="subdued" as="p">No sync activity yet</Text>
+                  <Button onClick={() => navigate('/listings')}>List your first product →</Button>
+                </BlockStack>
+              </Box>
+            ) : (
               <BlockStack gap="300">
-                <InlineStack align="space-between">
-                  <Text variant="headingMd" as="h3">
-                    Recent sync activity
-                  </Text>
-                  <Button variant="plain" icon={ChartLineIcon} onClick={() => navigate('/logs')}>
-                    View logs
-                  </Button>
-                </InlineStack>
-                {activityRows.length === 0 ? (
-                  <Box padding="300">
-                    <InlineStack align="center">
-                      <Text tone="subdued" as="p">
-                        No recent activity
-                      </Text>
+                {activityRows.map((row) => (
+                  <InlineStack key={row.id} align="space-between" blockAlign="start">
+                    <BlockStack gap="050">
+                      <Text variant="bodyMd" as="p" fontWeight="medium">{row.topic}</Text>
+                      <Text variant="bodySm" tone="subdued" as="p">{row.source}</Text>
+                    </BlockStack>
+                    <InlineStack gap="200" blockAlign="center">
+                      <Badge
+                        tone={
+                          row.status === 'error'
+                            ? 'critical'
+                            : row.status === 'warning'
+                              ? 'warning'
+                              : row.status === 'success'
+                                ? 'success'
+                                : 'info'
+                        }
+                      >
+                        {row.status}
+                      </Badge>
+                      <Text variant="bodySm" tone="subdued" as="p">{row.timestamp}</Text>
                     </InlineStack>
-                  </Box>
-                ) : (
-                  <BlockStack gap="200">
-                    {activityRows.map((row) => (
-                      <InlineStack key={row.id} align="space-between">
-                        <BlockStack gap="100">
-                          <Text variant="bodyMd" as="p">
-                            {row.topic}
-                          </Text>
-                          <Text variant="bodySm" tone="subdued" as="p">
-                            {row.source}
-                          </Text>
-                        </BlockStack>
-                        <BlockStack gap="100" inlineAlign="end">
-                          <Badge tone={row.status === 'error' ? 'critical' : row.status === 'warning' ? 'warning' : 'info'}>
-                            {row.status}
-                          </Badge>
-                          <Text variant="bodySm" tone="subdued" as="p">
-                            {row.timestamp}
-                          </Text>
-                        </BlockStack>
-                      </InlineStack>
-                    ))}
-                  </BlockStack>
-                )}
+                  </InlineStack>
+                ))}
               </BlockStack>
-            </Card>
-          </Layout.Section>
-        </Layout>
+            )}
+          </BlockStack>
+        </Card>
       </BlockStack>
     </Page>
   );

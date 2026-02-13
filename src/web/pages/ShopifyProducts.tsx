@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useCallback } from 'react';
 import {
   Badge,
   Banner,
+  Box,
   Button,
   ButtonGroup,
   Card,
@@ -14,11 +15,16 @@ import {
   Pagination,
   Select,
   Spinner,
+  Tabs,
   Text,
   TextField,
   Thumbnail,
 } from '@shopify/polaris';
 import { ExternalLink, Filter, Play, Search, SortAsc, SortDesc } from 'lucide-react';
+import {
+  SearchIcon,
+  CheckCircleIcon,
+} from '@shopify/polaris-icons';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { apiClient, useListings } from '../hooks/useApi';
@@ -45,20 +51,30 @@ const formatTimestamp = (value?: number | string | null) => {
 
 const getShopifyStatusBadge = (status?: string | null) => {
   const normalized = (status || '').toLowerCase();
-  if (normalized === 'active') return <Badge tone="success">active</Badge>;
-  if (normalized === 'draft') return <Badge tone="info">draft</Badge>;
-  if (normalized === 'archived') return <Badge tone="warning">archived</Badge>;
+  if (normalized === 'active') return <Badge tone="success">Active</Badge>;
+  if (normalized === 'draft') return <Badge>Draft</Badge>;
+  if (normalized === 'archived') return <Badge tone="warning">Archived</Badge>;
   return <Badge>{status || 'unknown'}</Badge>;
 };
 
 const getEbayBadge = (status: string) => {
   if (status === 'listed') return <Badge tone="success">Listed</Badge>;
   if (status === 'draft') return <Badge tone="info">Draft</Badge>;
-  return <Badge>Not listed</Badge>;
+  return <Text as="span" tone="subdued">—</Text>;
 };
 
-const getBinaryBadge = (value: boolean) =>
-  value ? <Badge tone="success">✅ Done</Badge> : <Badge>❌ Not yet</Badge>;
+const StatusDot: React.FC<{ done: boolean; label?: string }> = ({ done, label }) => (
+  <InlineStack gap="100" blockAlign="center" wrap={false}>
+    <span style={{
+      display: 'inline-block',
+      width: 8,
+      height: 8,
+      borderRadius: '50%',
+      backgroundColor: done ? '#22c55e' : '#d1d5db',
+    }} />
+    {label && <Text as="span" tone={done ? undefined : 'subdued'} variant="bodySm">{label}</Text>}
+  </InlineStack>
+);
 
 interface ProductOverview {
   shopifyProductId: string;
@@ -402,16 +418,23 @@ export const ShopifyProductDetail: React.FC = () => {
 
 /* ──────────────────── ShopifyProducts (list) ──────────────────── */
 
+const TAB_FILTERS = [
+  { id: 'all', content: 'All' },
+  { id: 'draft', content: 'Draft' },
+  { id: 'active', content: 'Active' },
+  { id: 'needs_description', content: 'Needs Description' },
+  { id: 'needs_images', content: 'Needs Images' },
+  { id: 'listed', content: 'On eBay' },
+] as const;
+
 const ShopifyProducts: React.FC = () => {
   const navigate = useNavigate();
   const { addNotification } = useAppStore();
 
   const [searchValue, setSearchValue] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [sortKey, setSortKey] = useState('shopifyStatus');
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [selectedTab, setSelectedTab] = useState(0);
   const [page, setPage] = useState(1);
-  const pageSize = 25;
+  const pageSize = 50;
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['products-overview'],
@@ -419,23 +442,32 @@ const ShopifyProducts: React.FC = () => {
     refetchInterval: 30000,
   });
 
-  const runPipelineMutation = useMutation({
-    mutationFn: (productId: string) => apiClient.post(`/auto-list/${productId}`),
-    onSuccess: (_result, productId) => {
-      addNotification({ type: 'success', title: 'Pipeline started', message: `Product ${productId}` });
-    },
-    onError: (error) => {
-      addNotification({ type: 'error', title: 'Pipeline failed to start', message: error instanceof Error ? error.message : 'Unknown error' });
-    },
-  });
-
   const products = data?.products ?? [];
+
+  // Pre-compute counts for tab badges
+  const tabCounts = useMemo(() => {
+    const nonArchived = products.filter((p) => (p.shopifyStatus ?? '').toLowerCase() !== 'archived');
+    return {
+      all: nonArchived.length,
+      draft: nonArchived.filter((p) => (p.shopifyStatus ?? '').toLowerCase() === 'draft').length,
+      active: nonArchived.filter((p) => (p.shopifyStatus ?? '').toLowerCase() === 'active').length,
+      needs_description: nonArchived.filter((p) => !p.hasAiDescription).length,
+      needs_images: nonArchived.filter((p) => !p.hasProcessedImages).length,
+      listed: nonArchived.filter((p) => p.ebayStatus === 'listed' || p.ebayStatus === 'draft').length,
+    };
+  }, [products]);
+
+  const tabs = TAB_FILTERS.map((tab) => ({
+    ...tab,
+    content: `${tab.content} (${tabCounts[tab.id]})`,
+  }));
+
+  const statusFilter = TAB_FILTERS[selectedTab]?.id ?? 'all';
 
   const filtered = useMemo(() => {
     const query = searchValue.trim().toLowerCase();
 
     return products.filter((product) => {
-      // Hide archived products entirely
       if ((product.shopifyStatus ?? '').toLowerCase() === 'archived') return false;
 
       const matchesQuery =
@@ -446,70 +478,83 @@ const ShopifyProducts: React.FC = () => {
       if (!matchesQuery) return false;
 
       switch (statusFilter) {
-        case 'ready':
-          return product.hasAiDescription && product.hasProcessedImages && product.ebayStatus === 'not_listed';
+        case 'draft':
+          return (product.shopifyStatus ?? '').toLowerCase() === 'draft';
+        case 'active':
+          return (product.shopifyStatus ?? '').toLowerCase() === 'active';
         case 'needs_description':
           return !product.hasAiDescription;
         case 'needs_images':
           return !product.hasProcessedImages;
         case 'listed':
           return product.ebayStatus === 'listed' || product.ebayStatus === 'draft';
-        case 'not_listed':
-          return product.ebayStatus === 'not_listed';
         default:
           return true;
       }
     });
   }, [products, searchValue, statusFilter]);
 
+  // Always sort: drafts first, then active, then alphabetical
   const sorted = useMemo(() => {
-    const direction = sortDirection === 'asc' ? 1 : -1;
-    const rank = { draft: 1, active: 2, archived: 3 } as Record<string, number>;
-    const ebayRank = { listed: 1, draft: 2, not_listed: 3 } as Record<string, number>;
-
+    const rank = { draft: 0, active: 1 } as Record<string, number>;
     return [...filtered].sort((a, b) => {
-      let left: string | number = '';
-      let right: string | number = '';
-
-      switch (sortKey) {
-        case 'sku':
-          left = a.sku || '';
-          right = b.sku || '';
-          break;
-        case 'price':
-          left = Number(a.price || 0);
-          right = Number(b.price || 0);
-          break;
-        case 'shopifyStatus':
-          left = rank[a.shopifyStatus] ?? 99;
-          right = rank[b.shopifyStatus] ?? 99;
-          break;
-        case 'ai':
-          left = a.hasAiDescription ? 1 : 0;
-          right = b.hasAiDescription ? 1 : 0;
-          break;
-        case 'images':
-          left = a.hasProcessedImages ? 1 : 0;
-          right = b.hasProcessedImages ? 1 : 0;
-          break;
-        case 'ebayStatus':
-          left = ebayRank[a.ebayStatus] ?? 99;
-          right = ebayRank[b.ebayStatus] ?? 99;
-          break;
-        default:
-          left = a.title.toLowerCase();
-          right = b.title.toLowerCase();
-      }
-
-      if (left < right) return -1 * direction;
-      if (left > right) return 1 * direction;
-      return 0;
+      const ra = rank[(a.shopifyStatus ?? '').toLowerCase()] ?? 2;
+      const rb = rank[(b.shopifyStatus ?? '').toLowerCase()] ?? 2;
+      if (ra !== rb) return ra - rb;
+      return a.title.localeCompare(b.title);
     });
-  }, [filtered, sortKey, sortDirection]);
+  }, [filtered]);
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pageItems = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+  const handleTabChange = useCallback((index: number) => {
+    setSelectedTab(index);
+    setPage(1);
+  }, []);
+
+  const rowMarkup = pageItems.map((product, index) => (
+    <IndexTable.Row
+      id={product.shopifyProductId}
+      key={product.shopifyProductId}
+      position={index}
+      onClick={() => navigate(`/listings/${product.shopifyProductId}`)}
+    >
+      <IndexTable.Cell>
+        <InlineStack gap="300" blockAlign="center" wrap={false}>
+          <Thumbnail
+            size="extraSmall"
+            source={product.imageUrl || PLACEHOLDER_IMG}
+            alt={product.title}
+          />
+          <BlockStack gap="050">
+            <InlineStack gap="200" blockAlign="center" wrap={false}>
+              <Text as="span" variant="bodyMd" fontWeight="semibold">
+                {product.title}
+              </Text>
+              {getShopifyStatusBadge(product.shopifyStatus)}
+            </InlineStack>
+            {product.sku && (
+              <Text as="span" variant="bodySm" tone="subdued">{product.sku}</Text>
+            )}
+          </BlockStack>
+        </InlineStack>
+      </IndexTable.Cell>
+      <IndexTable.Cell>
+        <Text as="span" variant="bodyMd">{formatMoney(product.price)}</Text>
+      </IndexTable.Cell>
+      <IndexTable.Cell>
+        <StatusDot done={product.hasAiDescription} />
+      </IndexTable.Cell>
+      <IndexTable.Cell>
+        <StatusDot done={product.hasProcessedImages} />
+      </IndexTable.Cell>
+      <IndexTable.Cell>
+        {getEbayBadge(product.ebayStatus)}
+      </IndexTable.Cell>
+    </IndexTable.Row>
+  ));
 
   const summary = data?.summary ?? {
     total: 0,
@@ -519,210 +564,77 @@ const ShopifyProducts: React.FC = () => {
     draftOnEbay: 0,
   };
 
-  const rowMarkup = pageItems.map((product, index) => {
-    const canViewEbay = Boolean(product.ebayListingId && !product.ebayListingId.startsWith('draft-'));
-    return (
-      <IndexTable.Row
-        id={product.shopifyProductId}
-        key={product.shopifyProductId}
-        position={index}
-        onClick={() => navigate(`/listings/${product.shopifyProductId}`)}
-      >
-        <IndexTable.Cell>
-          <Thumbnail
-            size="small"
-            source={product.imageUrl || PLACEHOLDER_IMG}
-            alt={product.title}
-          />
-        </IndexTable.Cell>
-        <IndexTable.Cell>
-          <InlineStack gap="200" blockAlign="center" wrap={false}>
-            <Button variant="plain" onClick={() => navigate(`/listings/${product.shopifyProductId}`)}>
-              {product.title}
-            </Button>
-            {getShopifyStatusBadge(product.shopifyStatus)}
-          </InlineStack>
-        </IndexTable.Cell>
-        <IndexTable.Cell>{product.sku || '—'}</IndexTable.Cell>
-        <IndexTable.Cell>{formatMoney(product.price)}</IndexTable.Cell>
-        <IndexTable.Cell>{getBinaryBadge(product.hasAiDescription)}</IndexTable.Cell>
-        <IndexTable.Cell>{getBinaryBadge(product.hasProcessedImages)}</IndexTable.Cell>
-        <IndexTable.Cell>{getEbayBadge(product.ebayStatus)}</IndexTable.Cell>
-        <IndexTable.Cell>
-          <div onClick={(event) => event.stopPropagation()}>
-            <ButtonGroup>
-              <Button
-                size="slim"
-                icon={<Play className="w-3 h-3" />}
-                onClick={() => runPipelineMutation.mutate(product.shopifyProductId)}
-                loading={runPipelineMutation.isPending && runPipelineMutation.variables === product.shopifyProductId}
-              >
-                Run Pipeline
-              </Button>
-              <Button
-                size="slim"
-                icon={<ExternalLink className="w-3 h-3" />}
-                onClick={() => product.ebayListingId && window.open(`https://www.ebay.com/itm/${product.ebayListingId}`, '_blank')}
-                disabled={!canViewEbay}
-              >
-                View on eBay
-              </Button>
-            </ButtonGroup>
-          </div>
-        </IndexTable.Cell>
-      </IndexTable.Row>
-    );
-  });
-
-  const pagination = (
-    <Pagination
-      hasPrevious={currentPage > 1}
-      onPrevious={() => setPage((prev) => Math.max(1, prev - 1))}
-      hasNext={currentPage < totalPages}
-      onNext={() => setPage((prev) => Math.min(totalPages, prev + 1))}
-    />
-  );
-
   return (
-    <Page title="Product Management Hub" subtitle="Unified Shopify + pipeline + eBay status">
-      <Layout>
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="300">
-              <InlineStack align="space-between" gap="300" wrap>
-                <BlockStack gap="100">
-                  <Text variant="headingMd" as="h2">Catalog Summary</Text>
-                  <Text tone="subdued" as="p">All Shopify products with pipeline and eBay status.</Text>
-                </BlockStack>
-                <InlineStack gap="400" wrap>
-                  <BlockStack gap="100" inlineAlign="center">
-                    <Text variant="headingMd" as="p">{summary.total}</Text>
-                    <Text variant="bodySm" tone="subdued" as="p">Total products</Text>
-                  </BlockStack>
-                  <BlockStack gap="100" inlineAlign="center">
-                    <Text variant="headingMd" as="p">{summary.withDescriptions}</Text>
-                    <Text variant="bodySm" tone="subdued" as="p">AI descriptions</Text>
-                  </BlockStack>
-                  <BlockStack gap="100" inlineAlign="center">
-                    <Text variant="headingMd" as="p">{summary.withProcessedImages}</Text>
-                    <Text variant="bodySm" tone="subdued" as="p">Images processed</Text>
-                  </BlockStack>
-                  <BlockStack gap="100" inlineAlign="center">
-                    <Text variant="headingMd" as="p">{summary.listedOnEbay}</Text>
-                    <Text variant="bodySm" tone="subdued" as="p">Listed on eBay</Text>
-                  </BlockStack>
-                  <BlockStack gap="100" inlineAlign="center">
-                    <Text variant="headingMd" as="p">{summary.draftOnEbay}</Text>
-                    <Text variant="bodySm" tone="subdued" as="p">Draft on eBay</Text>
-                  </BlockStack>
-                </InlineStack>
+    <Page
+      title="Products"
+      subtitle={`${summary.total.toLocaleString()} products · ${summary.withDescriptions} descriptions · ${summary.withProcessedImages} images · ${summary.listedOnEbay + summary.draftOnEbay} on eBay`}
+      fullWidth
+    >
+      <BlockStack gap="0">
+        <Card padding="0">
+          <Tabs tabs={tabs} selected={selectedTab} onSelect={handleTabChange} />
+
+          <Box padding="300">
+            <TextField
+              label=""
+              placeholder="Search products…"
+              value={searchValue}
+              onChange={(value) => { setSearchValue(value); setPage(1); }}
+              prefix={<Search className="w-4 h-4" />}
+              clearButton
+              onClearButtonClick={() => setSearchValue('')}
+              autoComplete="off"
+            />
+          </Box>
+
+          {error && (
+            <Box padding="300">
+              <Banner tone="critical" title="Unable to load products">
+                <p>{error instanceof Error ? error.message : 'Something went wrong.'}</p>
+              </Banner>
+            </Box>
+          )}
+
+          {isLoading ? (
+            <Box padding="800">
+              <InlineStack align="center">
+                <Spinner accessibilityLabel="Loading products" size="large" />
               </InlineStack>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
+            </Box>
+          ) : (
+            <IndexTable
+              resourceName={{ singular: 'product', plural: 'products' }}
+              itemCount={pageItems.length}
+              selectable={false}
+              headings={[
+                { title: 'Product' },
+                { title: 'Price' },
+                { title: 'AI Desc' },
+                { title: 'Images' },
+                { title: 'eBay' },
+              ]}
+            >
+              {rowMarkup}
+            </IndexTable>
+          )}
+        </Card>
 
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="300">
-              <InlineStack gap="300" align="space-between" wrap>
-                <TextField
-                  label=""
-                  placeholder="Search by product name or SKU"
-                  value={searchValue}
-                  onChange={(value) => {
-                    setSearchValue(value);
-                    setPage(1);
-                  }}
-                  prefix={<Search className="w-4 h-4" />}
-                  clearButton
-                  onClearButtonClick={() => setSearchValue('')}
-                  autoComplete="off"
-                />
-                <InlineStack gap="200" wrap>
-                  <Select
-                    label="Status"
-                    labelHidden
-                    value={statusFilter}
-                    onChange={(value) => {
-                      setStatusFilter(value);
-                      setPage(1);
-                    }}
-                    options={[
-                      { label: 'All', value: 'all' },
-                      { label: 'Ready to List', value: 'ready' },
-                      { label: 'Needs Description', value: 'needs_description' },
-                      { label: 'Needs Images', value: 'needs_images' },
-                      { label: 'Listed', value: 'listed' },
-                      { label: 'Not Listed', value: 'not_listed' },
-                    ]}
-                  />
-                  <Select
-                    label="Sort by"
-                    labelHidden
-                    value={sortKey}
-                    onChange={(value) => setSortKey(value)}
-                    options={[
-                      { label: 'Product Name', value: 'title' },
-                      { label: 'SKU', value: 'sku' },
-                      { label: 'Price', value: 'price' },
-                      { label: 'Shopify Status', value: 'shopifyStatus' },
-                      { label: 'AI Description', value: 'ai' },
-                      { label: 'Images Processed', value: 'images' },
-                      { label: 'eBay Status', value: 'ebayStatus' },
-                    ]}
-                  />
-                  <Button
-                    icon={sortDirection === 'asc' ? <SortAsc className="w-4 h-4" /> : <SortDesc className="w-4 h-4" />}
-                    onClick={() => setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
-                  >
-                    {sortDirection === 'asc' ? 'Asc' : 'Desc'}
-                  </Button>
-                </InlineStack>
-              </InlineStack>
-
-              <Divider />
-
-              {error && (
-                <Banner tone="critical" title="Unable to load products">
-                  <p>{error instanceof Error ? error.message : 'Something went wrong.'}</p>
-                </Banner>
-              )}
-
-              {isLoading ? (
-                <div style={{ textAlign: 'center', padding: '2rem' }}>
-                  <Spinner accessibilityLabel="Loading products" size="large" />
-                </div>
-              ) : (
-                <IndexTable
-                  resourceName={{ singular: 'product', plural: 'products' }}
-                  itemCount={pageItems.length}
-                  headings={[
-                    { title: 'Thumbnail' },
-                    { title: 'Product Name' },
-                    { title: 'SKU' },
-                    { title: 'Price' },
-                    { title: 'AI Description' },
-                    { title: 'Images Processed' },
-                    { title: 'eBay Status' },
-                    { title: 'Actions' },
-                  ]}
-                >
-                  {rowMarkup}
-                </IndexTable>
-              )}
-            </BlockStack>
-          </Card>
-        </Layout.Section>
-
-        <Layout.Section>
+        <Box padding="400">
           <InlineStack align="center" gap="400">
             <Text tone="subdued" as="p">
-              Showing {pageItems.length} of {sorted.length} products
+              {sorted.length === 0
+                ? 'No products match your filters'
+                : `Showing ${(currentPage - 1) * pageSize + 1}–${Math.min(currentPage * pageSize, sorted.length)} of ${sorted.length}`}
             </Text>
-            {pagination}
+            <Pagination
+              hasPrevious={currentPage > 1}
+              onPrevious={() => setPage((prev) => Math.max(1, prev - 1))}
+              hasNext={currentPage < totalPages}
+              onNext={() => setPage((prev) => Math.min(totalPages, prev + 1))}
+            />
           </InlineStack>
-        </Layout.Section>
-      </Layout>
+        </Box>
+      </BlockStack>
     </Page>
   );
 };
