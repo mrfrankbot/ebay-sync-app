@@ -996,6 +996,35 @@ router.post('/api/test/add-image', async (req: Request, res: Response) => {
   }
 });
 
+/** DELETE /api/test/delete-image — Delete an image from a Shopify product */
+router.delete('/api/test/delete-image', async (req: Request, res: Response) => {
+  try {
+    const db = await getRawDb();
+    const tokenRow = db.prepare(`SELECT access_token FROM auth_tokens WHERE platform = 'shopify'`).get() as any;
+    if (!tokenRow?.access_token) { res.status(400).json({ error: 'No Shopify token' }); return; }
+
+    const productId = (req.query.productId || req.body?.productId) as string;
+    const imageId = (req.query.imageId || req.body?.imageId) as string;
+    if (!productId || !imageId) { res.status(400).json({ error: 'productId and imageId required' }); return; }
+
+    const response = await fetch(
+      `https://usedcameragear.myshopify.com/admin/api/2024-01/products/${productId}/images/${imageId}.json`,
+      { method: 'DELETE', headers: { 'X-Shopify-Access-Token': tokenRow.access_token } },
+    );
+
+    if (!response.ok) {
+      const errText = await response.text();
+      res.status(500).json({ error: 'Failed to delete image', detail: errText });
+      return;
+    }
+
+    info(`[API] Image ${imageId} deleted from product ${productId}`);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed', detail: String(err) });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // AI Listing Management Endpoints
 // ---------------------------------------------------------------------------
