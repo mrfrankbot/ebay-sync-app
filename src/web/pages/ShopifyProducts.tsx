@@ -84,6 +84,14 @@ export const ShopifyProductDetail: React.FC = () => {
   const images: Array<{ id: number; src: string }> = product?.images ?? [];
   const mainImage = product?.image?.src ?? images[0]?.src ?? PLACEHOLDER_IMG;
 
+  /* Fetch AI-generated description if available */
+  const { data: aiDescription } = useQuery({
+    queryKey: ['ai-description', id],
+    queryFn: () => apiClient.get<{ ok: boolean; description?: string }>(`/auto-list/${id}/description`),
+    enabled: Boolean(id),
+    retry: 1,
+  });
+
   /* ── AI regeneration ── */
   const aiMutation = useMutation({
     mutationFn: () => apiClient.post(`/auto-list/${id}`),
@@ -195,7 +203,15 @@ export const ShopifyProductDetail: React.FC = () => {
                     Regenerate with AI
                   </Button>
                 </InlineStack>
-                {product.body_html ? (
+                {aiDescription?.description ? (
+                  <BlockStack gap="200">
+                    <Badge tone="success">AI-generated</Badge>
+                    <div
+                      style={{ maxHeight: '300px', overflow: 'auto', padding: '8px', background: '#fafafa', borderRadius: '6px' }}
+                      dangerouslySetInnerHTML={{ __html: aiDescription.description }}
+                    />
+                  </BlockStack>
+                ) : product.body_html ? (
                   <div
                     style={{ maxHeight: '300px', overflow: 'auto', padding: '8px', background: '#fafafa', borderRadius: '6px' }}
                     dangerouslySetInnerHTML={{ __html: product.body_html }}
@@ -262,17 +278,23 @@ export const ShopifyProductDetail: React.FC = () => {
                     </InlineStack>
                     <InlineStack align="space-between">
                       <Text variant="bodyMd" tone="subdued" as="span">Status</Text>
-                      <Badge tone={listing.status === 'active' || listing.status === 'synced' ? 'success' : 'info'}>
-                        {listing.status}
-                      </Badge>
+                      {listing.ebayListingId.startsWith('draft-') ? (
+                        <Badge tone="info">Draft — not yet published</Badge>
+                      ) : (
+                        <Badge tone={listing.status === 'active' || listing.status === 'synced' ? 'success' : 'info'}>
+                          {listing.status}
+                        </Badge>
+                      )}
                     </InlineStack>
                     <InlineStack gap="200">
-                      <Button
-                        icon={<ExternalLink className="w-4 h-4" />}
-                        onClick={() => window.open(`https://www.ebay.com/itm/${listing.ebayListingId}`, '_blank')}
-                      >
-                        View on eBay
-                      </Button>
+                      {!listing.ebayListingId.startsWith('draft-') && (
+                        <Button
+                          icon={<ExternalLink className="w-4 h-4" />}
+                          onClick={() => window.open(`https://www.ebay.com/itm/${listing.ebayListingId}`, '_blank')}
+                        >
+                          View on eBay
+                        </Button>
+                      )}
                       <Button onClick={() => navigate(`/ebay/listings/${listing.shopifyProductId}`)}>
                         Listing detail
                       </Button>

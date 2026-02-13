@@ -279,8 +279,8 @@ const Pipeline: React.FC = () => {
     retry: 1,
   });
 
-  const jobs: PipelineJob[] = data?.data && data.data.length > 0 ? data.data : SAMPLE_JOBS;
-  const usingDemo = !data?.data || data.data.length === 0;
+  const jobs: PipelineJob[] = data?.data ?? [];
+  const isEmpty = jobs.length === 0;
 
   const stages = buildStages(jobs);
   const hasActiveFlow = stages.some((s) => s.activeCount > 0);
@@ -370,13 +370,6 @@ const Pipeline: React.FC = () => {
         {/* Pipeline visualization */}
         <Card>
           <div style={{ padding: '24px 16px' }}>
-            {usingDemo && (
-              <div style={{ marginBottom: '16px' }}>
-                <Text as="p" tone="subdued" variant="bodySm">
-                  Showing sample data — pipeline API not connected yet
-                </Text>
-              </div>
-            )}
             <div className="pipeline-flow">
               {stages.map((stage, i) => (
                 <React.Fragment key={stage.key}>
@@ -397,47 +390,55 @@ const Pipeline: React.FC = () => {
               <Text as="p" variant="headingMd">
                 Recent Pipeline Jobs
               </Text>
-              <IndexTable
-                resourceName={{ singular: 'job', plural: 'jobs' }}
-                itemCount={jobs.length}
-                headings={[
-                  { title: 'Product' },
-                  { title: 'Status' },
-                  { title: 'Current Step' },
-                  { title: 'Started' },
-                  { title: 'Completed' },
-                ]}
-                selectable={false}
-              >
-                {jobs.map((job, idx) => (
-                  <IndexTable.Row key={job.id} id={job.id} position={idx}>
-                    <IndexTable.Cell>
-                      <Text as="span" variant="bodyMd" fontWeight="semibold">
-                        {job.product}
-                      </Text>
-                    </IndexTable.Cell>
-                    <IndexTable.Cell>
-                      <InlineStack gap="200" blockAlign="center">
-                        {statusIcon(job.status)}
-                        {statusBadge(job.status)}
-                      </InlineStack>
-                    </IndexTable.Cell>
-                    <IndexTable.Cell>
-                      <Text as="span">{job.currentStep}</Text>
-                    </IndexTable.Cell>
-                    <IndexTable.Cell>
-                      <Text as="span" tone="subdued">
-                        {timeAgo(job.started)}
-                      </Text>
-                    </IndexTable.Cell>
-                    <IndexTable.Cell>
-                      <Text as="span" tone="subdued">
-                        {job.completed ? timeAgo(job.completed) : '—'}
-                      </Text>
-                    </IndexTable.Cell>
-                  </IndexTable.Row>
-                ))}
-              </IndexTable>
+              {isEmpty ? (
+                <div style={{ textAlign: 'center', padding: '2rem' }}>
+                  <Text as="p" tone="subdued">
+                    No pipeline jobs yet. Enter a Shopify Product ID above to run the pipeline.
+                  </Text>
+                </div>
+              ) : (
+                <IndexTable
+                  resourceName={{ singular: 'job', plural: 'jobs' }}
+                  itemCount={jobs.length}
+                  headings={[
+                    { title: 'Product' },
+                    { title: 'Status' },
+                    { title: 'Current Step' },
+                    { title: 'Started' },
+                    { title: 'Completed' },
+                  ]}
+                  selectable={false}
+                >
+                  {jobs.map((job, idx) => (
+                    <IndexTable.Row key={job.id} id={job.id} position={idx}>
+                      <IndexTable.Cell>
+                        <Text as="span" variant="bodyMd" fontWeight="semibold">
+                          {job.product}
+                        </Text>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <InlineStack gap="200" blockAlign="center">
+                          {statusIcon(job.status)}
+                          {statusBadge(job.status)}
+                        </InlineStack>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <Text as="span">{job.currentStep}</Text>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <Text as="span" tone="subdued">
+                          {timeAgo(job.started)}
+                        </Text>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <Text as="span" tone="subdued">
+                          {job.completed ? timeAgo(job.completed) : '—'}
+                        </Text>
+                      </IndexTable.Cell>
+                    </IndexTable.Row>
+                  ))}
+                </IndexTable>
+              )}
             </BlockStack>
           </div>
         </Card>

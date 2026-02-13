@@ -20,20 +20,38 @@ import {
   ProductIcon,
   OrderIcon,
 } from '@shopify/polaris-icons';
+import { useNavigate } from 'react-router-dom';
 import { useLogs, useStatus } from '../hooks/useApi';
 import MetricCard from '../components/MetricCard';
 import { useAppStore } from '../store';
 
 const formatTimestamp = (value?: string | number | null) => {
   if (!value) return '—';
-  const date = typeof value === 'number' ? new Date(value) : new Date(value);
+  let date: Date;
+  if (typeof value === 'number') {
+    // If the timestamp looks like Unix seconds (< 1e12), convert to ms
+    const ms = value > 1_000_000_000_000 ? value : value * 1000;
+    date = new Date(ms);
+  } else {
+    date = new Date(value);
+  }
   if (Number.isNaN(date.getTime())) return '—';
   return date.toLocaleString();
+};
+
+const formatUptime = (seconds?: number | null) => {
+  if (!seconds || seconds <= 0) return '—';
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  const hours = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
 };
 
 const Dashboard: React.FC = () => {
   const { data: statusData, isLoading, error } = useStatus();
   const { data: logsData } = useLogs(10);
+  const navigate = useNavigate();
   const { notifications, connections } = useAppStore();
 
   const activityRows = useMemo(() => {
@@ -128,7 +146,7 @@ const Dashboard: React.FC = () => {
                       Uptime
                     </Text>
                     <Text variant="headingSm" as="p">
-                      {statusData?.uptime ? `${Math.floor(statusData.uptime / 3600)}h` : '—'}
+                      {formatUptime(statusData?.uptime)}
                     </Text>
                   </Box>
                 </InlineStack>
@@ -165,7 +183,7 @@ const Dashboard: React.FC = () => {
                   <Text variant="headingMd" as="h3">
                     Recent sync activity
                   </Text>
-                  <Button variant="plain" icon={ChartLineIcon} disabled>
+                  <Button variant="plain" icon={ChartLineIcon} onClick={() => navigate('/logs')}>
                     View logs
                   </Button>
                 </InlineStack>

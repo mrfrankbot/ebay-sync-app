@@ -5,7 +5,6 @@ import {
   Button,
   ButtonGroup,
   Card,
-  Checkbox,
   Divider,
   IndexTable,
   InlineStack,
@@ -79,9 +78,15 @@ const normalizeListing = (listing: any): ListingRecord => {
   };
 };
 
+const isDraftListing = (ebayListingId?: string | null) =>
+  Boolean(ebayListingId && ebayListingId.startsWith('draft-'));
+
 const getStatusPresentation = (listing: ListingRecord) => {
   if (!listing.ebayListingId) {
     return { label: 'Missing', tone: 'critical' as const, dot: '#d72c0d' };
+  }
+  if (isDraftListing(listing.ebayListingId)) {
+    return { label: 'Draft', tone: 'info' as const, dot: '#8c9196' };
   }
   const normalized = listing.status.toLowerCase();
   if (normalized === 'active' || normalized === 'synced') {
@@ -284,7 +289,7 @@ const ListingDetail: React.FC = () => {
     },
   ];
 
-  if (listing?.ebayListingId) {
+  if (listing?.ebayListingId && !isDraftListing(listing.ebayListingId)) {
     secondaryActions.push({
       content: 'View on eBay',
       onAction: () => {
@@ -381,20 +386,26 @@ const ListingDetail: React.FC = () => {
                 )}
                 <Divider />
                 <InlineStack gap="200">
-                  <Button
-                    icon={<ExternalLink className="w-4 h-4" />}
-                    onClick={() => listing.ebayListingId && window.open(`https://www.ebay.com/itm/${listing.ebayListingId}`, '_blank')}
-                    disabled={!listing.ebayListingId}
-                  >
-                    View on eBay
-                  </Button>
-                  <Button
-                    icon={<ExternalLink className="w-4 h-4" />}
-                    onClick={() => listing.ebayListingId && window.open(`https://www.ebay.com/sh/lst/edit/${listing.ebayListingId}`, '_blank')}
-                    disabled={!listing.ebayListingId}
-                  >
-                    Edit on eBay
-                  </Button>
+                  {isDraftListing(listing.ebayListingId) ? (
+                    <Badge tone="info">Draft — not yet published</Badge>
+                  ) : (
+                    <>
+                      <Button
+                        icon={<ExternalLink className="w-4 h-4" />}
+                        onClick={() => listing.ebayListingId && window.open(`https://www.ebay.com/itm/${listing.ebayListingId}`, '_blank')}
+                        disabled={!listing.ebayListingId}
+                      >
+                        View on eBay
+                      </Button>
+                      <Button
+                        icon={<ExternalLink className="w-4 h-4" />}
+                        onClick={() => window.open(`https://www.ebay.com/sh/lst/active?q=${encodeURIComponent(listing.shopifySku || '')}`, '_blank')}
+                        disabled={!listing.ebayListingId}
+                      >
+                        Edit on eBay
+                      </Button>
+                    </>
+                  )}
                 </InlineStack>
               </BlockStack>
             </Card>
@@ -575,22 +586,15 @@ const Listings: React.FC = () => {
   const rowMarkup = pageListings.map((listing, index) => {
     const status = getStatusPresentation(listing);
     const productLabel = listing.shopifyTitle ?? `Shopify product ${listing.shopifyProductId}`;
+    const draft = isDraftListing(listing.ebayListingId);
     return (
       <IndexTable.Row
         id={listing.shopifyProductId}
         key={listing.id}
         position={index}
+        selected={selectedItems.includes(listing.shopifyProductId)}
         onClick={() => navigate(`/ebay/listings/${listing.shopifyProductId}`)}
       >
-        <IndexTable.Cell>
-          <div onClick={(event) => event.stopPropagation()}>
-            <Checkbox
-              label=""
-              checked={selectedItems.includes(listing.shopifyProductId)}
-              onChange={() => toggleSelection(listing.shopifyProductId)}
-            />
-          </div>
-        </IndexTable.Cell>
         <IndexTable.Cell>
           <BlockStack gap="100">
             <Text variant="bodyMd" fontWeight="semibold" as="p">{productLabel}</Text>
@@ -626,14 +630,18 @@ const Listings: React.FC = () => {
         </IndexTable.Cell>
         <IndexTable.Cell>
           <div onClick={(event) => event.stopPropagation()}>
-            <Button
-              size="micro"
-              icon={<ExternalLink className="w-3 h-3" />}
-              onClick={() => listing.ebayListingId && window.open(`https://www.ebay.com/itm/${listing.ebayListingId}`, '_blank')}
-              disabled={!listing.ebayListingId}
-            >
-              View
-            </Button>
+            {draft ? (
+              <Badge tone="info">Draft</Badge>
+            ) : (
+              <Button
+                size="micro"
+                icon={<ExternalLink className="w-3 h-3" />}
+                onClick={() => listing.ebayListingId && window.open(`https://www.ebay.com/itm/${listing.ebayListingId}`, '_blank')}
+                disabled={!listing.ebayListingId}
+              >
+                View
+              </Button>
+            )}
           </div>
         </IndexTable.Cell>
       </IndexTable.Row>
@@ -752,17 +760,15 @@ const Listings: React.FC = () => {
                 <IndexTable
                   resourceName={{ singular: 'listing', plural: 'listings' }}
                   itemCount={pageListings.length}
+                  selectedItemsCount={selectedItems.length}
+                  onSelectionChange={(selectionType, toggleType, id) => {
+                    if (selectionType === 'all') {
+                      toggleSelectAll(!allSelectedOnPage);
+                    } else if (id && typeof id === 'string') {
+                      toggleSelection(id);
+                    }
+                  }}
                   headings={[
-                    {
-                      id: 'select',
-                      title: (
-                        <Checkbox
-                          label=""
-                          checked={allSelectedOnPage}
-                          onChange={(value) => toggleSelectAll(Boolean(value))}
-                        />
-                      ),
-                    },
                     { title: 'Product' },
                     { title: 'eBay listing' },
                     { title: 'Status' },
